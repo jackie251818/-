@@ -1,0 +1,71 @@
+/* 简化版Font Awesome图标 - 仅包含项目中使用的图标 */
+:root {
+    --fa-font-regular: normal 400 14px/1 "Font Awesome 6 Free";
+    --fa-font-solid: normal 900 14px/1 "Font Awesome 6 Free";
+}
+
+/* Font Awesome 字体定义 */
+/* 常规字体 - 如果需要使用常规图标，请下载并放置此文件 */
+@font-face {
+    font-family: 'Font Awesome 6 Free';
+    font-style: normal;
+    font-weight: 400;
+    src: url('fa-regular-400.woff2') format('woff2');
+}
+
+/* 实心字体 - 已包含在libs目录中 */
+@font-face {
+    font-family: 'Font Awesome 6 Free';
+    font-style: normal;
+    font-weight: 900;
+    src: url('fa-solid-900.woff2') format('woff2');
+}
+
+/* 下载地址（如果需要）：
+- https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-regular-400.woff2
+- https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-solid-900.woff2
+*/
+
+/* 使用系统字体作为回退 */
+.fas, .fa-solid, .far, .fa-regular {
+    font-family: 'Segoe UI Symbol', 'Arial Unicode MS', sans-serif;
+}
+
+.fas, .fa-solid {
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+}
+
+.far, .fa-regular {
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 400;
+}
+
+.fa, .fas, .far, .fal, .fad, .fab {
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-font-smoothing: antialiased;
+    display: inline-block;
+    font-style: normal;
+    font-variant: normal;
+    text-rendering: auto;
+    line-height: 1;
+}
+
+/* 项目中使用的图标 */
+.fa-laptop-code:before { content: "\f5fc"; }
+.fa-tachometer-alt:before, .fa-tachometer:before { content: "\f3fd"; }
+.fa-list:before { content: "\f03a"; }
+.fa-plus-circle:before { content: "\f055"; }
+.fa-chart-bar:before { content: "\f080"; }
+.fa-cog:before { content: "\f013"; }
+.fa-upload:before { content: "\f093"; }
+.fa-download:before { content: "\f019"; }
+.fa-file-download:before { content: "\f56d"; }
+.fa-save:before { content: "\f0c7"; }
+.fa-search-plus:before { content: "\f0fe"; }
+.fa-search-minus:before { content: "\f02d"; }
+.fa-cloud-upload-alt:before, .fa-cloud-arrow-up:before { content: "\f382"; }
+.fa-times:before { content: "\f00d"; }
+.fa-check:before { content: "\f00c"; }
+.fa-exclamation-circle:before { content: "\f06a"; }
+.fa-info-circle:before { content: "\f05a"; }

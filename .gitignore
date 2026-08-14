@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+
+# 用户数据（系统运行时自动生成，不提交到仓库）
+data/*.json
+data/*.js
+!data/.gitkeep
+
+# 系统文件
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志
+*.log
+
+# 临时文件
+*.tmp
+*.bak
+*.zip

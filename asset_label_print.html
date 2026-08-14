@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>资产标签打印</title>
+    <script src="libs/qrcode.min.js"></script>
+    <style>
+        /* ==================== 全局重置 ==================== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft YaHei", "Arial", sans-serif;
+        }
+
+        body {
+            background: #f5f5f5;
+            padding: 20px;
+            color: #333;
+        }
+
+        /* ==================== 页面头部 ==================== */
+        .page-header {
+            max-width: 800px;
+            margin: 0 auto 20px;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .page-header h1 {
+            font-size: 20px;
+            color: #333;
+        }
+
+        .page-header .actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: opacity 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.85;
+        }
+
+        .server-url-tip {
+            margin-top: 10px;
+            padding: 8px 12px;
+            background: #e6f7ff;
+            border: 1px solid #91d5ff;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #0050b3;
+        }
+
+        .server-url-tip strong {
+            color: #d4380d;
+            font-family: Consolas, Monaco, monospace;
+        }
+
+        .btn-primary {
+            background: #1890ff;
+            color: #fff;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        /* ==================== 标签切换 ==================== */
+        .tabs {
+            max-width: 800px;
+            margin: 0 auto 20px;
+            display: flex;
+            gap: 4px;
+            background: #fff;
+            padding: 6px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px 16px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            border-radius: 4px;
+            color: #666;
+            transition: all 0.2s;
+        }
+
+        .tab.active {
+            background: #1890ff;
+            color: #fff;
+        }
+
+        /* ==================== 标签列表区域 ==================== */
+        .labels-container {
+            max-width: 800px;
+            margin: 0 auto;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            min-height: 200px;
+        }
+
+        .empty-tip {
+            width: 100%;
+            text-align: center;
+            padding: 40px 0;
+            color: #999;
+            font-size: 14px;
+        }
+
+        /* ==================== 单个标签 (70mm × 50mm) ==================== */
+        .label-card {
+            width: 70mm;
+            height: 50mm;
+            background: #fff;
+            border: 1px solid #000;
+            position: relative;
+            overflow: hidden;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            page-break-after: always;
+            break-after: page;
+        }
+
+        /* 公司名栏 */
+        .label-header {
+            height: 6mm;
+            line-height: 6mm;
+            text-align: center;
+            font-size: 9pt;
+            font-weight: bold;
+            border-bottom: 1px solid #000;
+            background: #f0f0f0;
+            flex-shrink: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 0 2mm;
+        }
+
+        /* 标签主体 */
+        .label-body {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* 左侧信息区 */
+        .label-info {
+            flex: 1;
+            padding: 1mm 2mm;
+            font-size: 7pt;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            overflow: hidden;
+            border-right: 1px solid #000;
+        }
+
+        .label-info-row {
+            display: flex;
+            line-height: 1.3;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+
+        .label-info-label {
+            color: #333;
+            font-weight: bold;
+            flex-shrink: 0;
+            min-width: 13mm;
+        }
+
+        .label-info-value {
+            color: #000;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex: 1;
+        }
+
+        /* 右侧二维码区 */
+        .label-qrcode {
+            width: 24mm;
+            padding: 1mm;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .qrcode-wrapper {
+            width: 20mm;
+            height: 20mm;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #fff;
+            overflow: hidden;
+        }
+
+        .qrcode-wrapper canvas,
+        .qrcode-wrapper img {
+            width: 100% !important;
+            height: 100% !important;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            -ms-interpolation-mode: nearest-neighbor;
+        }
+
+        .qrcode-label {
+            font-size: 5pt;
+            text-align: center;
+            margin-top: 0.5mm;
+            color: #666;
+            line-height: 1.1;
+            word-break: break-all;
+        }
+
+        /* 已打印标记 */
+        .printed-mark {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: #52c41a;
+            color: #fff;
+            font-size: 5pt;
+            padding: 1px 4px;
+            border-bottom-left-radius: 4px;
+            z-index: 2;
+        }
+
+        /* ==================== 打印样式 ==================== */
+        @media print {
+            @page {
+                size: 70mm 50mm;
+                margin: 0;
+            }
+
+            /* 消除浏览器默认的页眉页脚区域 */
+            @page :first {
+                margin: 0;
+            }
+
+            html {
+                margin: 0 !important;
+                padding: 0 !important;
+                height: auto !important;
+                width: 70mm !important;
+                font-size: 0 !important;
+            }
+
+            body {
+                background: #fff !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                font-size: 0 !important;
+                line-height: 0 !important;
+                height: auto !important;
+                width: 70mm !important;
+                min-width: 70mm !important;
+                max-width: 70mm !important;
+                color: #000 !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+
+            .page-header,
+            .tabs {
+                display: none !important;
+            }
+
+            .labels-container {
+                display: block !important;
+                background: none !important;
+                box-shadow: none !important;
+                border-radius: 0 !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                max-width: 70mm !important;
+                width: 70mm !important;
+                min-height: 0 !important;
+                height: auto !important;
+                gap: 0 !important;
+                overflow: hidden !important;
+            }
+
+            .empty-tip {
+                display: none !important;
+            }
+
+            .label-card {
+                width: 70mm !important;
+                height: 48mm !important;
+                background: #fff !important;
+                border: 1px solid #000 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                box-sizing: border-box !important;
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+                page-break-after: page !important;
+                break-after: page !important;
+                overflow: hidden !important;
+                position: relative !important;
+                display: flex !important;
+                flex-direction: column !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+
+            .label-card:last-child {
+                page-break-after: auto !important;
+                break-after: auto !important;
+            }
+
+            .printed-mark {
+                display: none !important;
+            }
+
+            /* 标签头部 */
+            .label-header {
+                height: 6mm !important;
+                line-height: 6mm !important;
+                font-size: 9pt !important;
+                background: #f0f0f0 !important;
+                color: #000 !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+
+            /* 二维码打印优化 */
+            .label-qrcode {
+                width: 24mm !important;
+            }
+
+            .qrcode-wrapper {
+                width: 20mm !important;
+                height: 20mm !important;
+                background: #fff !important;
+            }
+
+            .qrcode-wrapper canvas,
+            .qrcode-wrapper img {
+                display: block !important;
+                width: 100% !important;
+                height: 100% !important;
+                image-rendering: pixelated !important;
+                image-rendering: crisp-edges !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-header">
+        <h1>资产标签打印（70mm × 50mm）</h1>
+        <div class="actions">
+            <button class="btn btn-secondary" id="btn-back">
+                <i class="fas fa-arrow-left"></i>
+                返回
+            </button>
+            <button class="btn btn-primary" id="btn-print">
+                <i class="fas fa-print"></i>
+                打印标签
+            </button>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" data-filter="all">全部资产</button>
+        <button class="tab" data-filter="unprinted">未打印</button>
+        <button class="tab" data-filter="printed">已打印</button>
+    </div>
+
+    <div class="labels-container" id="labels-container">
+        <div class="empty-tip">加载中...</div>
+    </div>
+
+    <script>
+        // ==================== 全局状态 ====================
+        let allAssets = [];
+        let currentFilter = 'all';
+        let singleAssetMode = false;
+        const PRINT_RECORD_KEY = 'assetLabelPrintRecord';
+        let serverBaseUrl = ''; // 服务器真实URL（含IP），用于生成二维码
+
+        // ==================== DOM 引用 ====================
+        const labelsContainer = document.getElementById('labels-container');
+
+        // ==================== 数据加载 ====================
+        async function loadAssets() {
+            const params = new URLSearchParams(window.location.search);
+            const assetIdParam = params.get('asset');
+            if (assetIdParam) {
+                singleAssetMode = true;
+                document.querySelectorAll('.tabs .tab').forEach(t => t.style.display = 'none');
+            }
+
+            // 获取服务器真实URL（含IP），用于生成可扫码的二维码
+            try {
+                const infoResp = await fetch('/api/info');
+                if (infoResp.ok) {
+                    const info = await infoResp.json();
+                    if (info.url) {
+                        serverBaseUrl = info.url;
+                        console.log('服务器地址:', serverBaseUrl);
+                    }
+                }
+            } catch (e) {
+                console.warn('获取服务器信息失败，使用当前地址:', e.message);
+            }
+            // 兜底：如果API不可用，用当前页面origin
+            if (!serverBaseUrl) {
+                serverBaseUrl = window.location.origin;
+            }
+
+            // 在页面头部显示服务器地址，方便用户手机访问验证
+            const header = document.querySelector('.page-header');
+            if (header && !header.querySelector('.server-url-tip')) {
+                const tip = document.createElement('div');
+                tip.className = 'server-url-tip';
+                tip.innerHTML = '📋 二维码已内嵌资产信息，扫码即可查看详情';
+                header.appendChild(tip);
+            }
+
+            let dataSource = null;
+
+            // 优先从服务器 API 加载
+            try {
+                const resp = await fetch('/api/load?key=assetManagementData');
+                if (resp.ok) {
+                    const result = await resp.json();
+                    const raw = result.data || result;
+                    if (Array.isArray(raw)) {
+                        dataSource = raw;
+                    } else if (raw && Array.isArray(raw.data)) {
+                        dataSource = raw.data;
+                    }
+                }
+            } catch (e) {
+                console.warn('API 加载失败，尝试 localStorage:', e.message);
+            }
+
+            // 回退到 localStorage
+            if (!dataSource || dataSource.length === 0) {
+                try {
+                    const saved = localStorage.getItem('assetManagementData');
+                    if (saved) {
+                        const parsed = JSON.parse(saved);
+                        if (Array.isArray(parsed)) {
+                            dataSource = parsed;
+                        } else if (parsed && Array.isArray(parsed.data)) {
+                            dataSource = parsed.data;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('localStorage 读取失败:', e.message);
+                }
+            }
+
+            allAssets = dataSource || [];
+
+            // 单资产模式：只显示指定资产
+            if (singleAssetMode && assetIdParam) {
+                const asset = allAssets.find(a => a.id === assetIdParam);
+                allAssets = asset ? [asset] : [];
+            }
+
+            filterAndRender();
+        }
+
+        // ==================== 筛选和渲染 ====================
+        function filterAndRender() {
+            const printedSet = getPrintedSet();
+            let list = [];
+
+            if (singleAssetMode) {
+                list = allAssets;
+            } else if (currentFilter === 'all') {
+                list = allAssets;
+            } else if (currentFilter === 'printed') {
+                list = allAssets.filter(a => printedSet.has(a.id));
+            } else if (currentFilter === 'unprinted') {
+                list = allAssets.filter(a => !printedSet.has(a.id));
+            }
+
+            renderLabels(list, printedSet);
+        }
+
+        function renderLabels(list, printedSet) {
+            if (!list || list.length === 0) {
+                labelsContainer.innerHTML = '<div class="empty-tip">暂无资产数据</div>';
+                return;
+            }
+
+            labelsContainer.innerHTML = '';
+            list.forEach(asset => {
+                const card = createLabelCard(asset, printedSet.has(asset.id));
+                labelsContainer.appendChild(card);
+            });
+        }
+
+        function createLabelCard(asset, isPrinted) {
+            const card = document.createElement('div');
+            card.className = 'label-card';
+            card.dataset.assetId = asset.id;
+
+            const companyName = asset.owner || '尚毅集团';
+            const assetName = asset.type || '-';
+            const configModel = asset.configuration || '-';
+            const assetCode = asset.id || '-';
+            const orgName = asset.owner || '-';
+            const responsible = asset.user || '-';
+            const location = asset.location || '-';
+
+            card.innerHTML = `
+                ${isPrinted ? '<div class="printed-mark">已打印</div>' : ''}
+                <div class="label-header" title="${escapeHtml(companyName)}">${escapeHtml(companyName)}</div>
+                <div class="label-body">
+                    <div class="label-info">
+                        <div class="label-info-row">
+                            <span class="label-info-label">资产名称:</span>
+                            <span class="label-info-value" title="${escapeHtml(assetName)}">${escapeHtml(assetName)}</span>
+                        </div>
+                        <div class="label-info-row">
+                            <span class="label-info-label">规格型号:</span>
+                            <span class="label-info-value" title="${escapeHtml(configModel)}">${escapeHtml(configModel)}</span>
+                        </div>
+                        <div class="label-info-row">
+                            <span class="label-info-label">资产编码:</span>
+                            <span class="label-info-value" title="${escapeHtml(assetCode)}">${escapeHtml(assetCode)}</span>
+                        </div>
+                        <div class="label-info-row">
+                            <span class="label-info-label">所属机构:</span>
+                            <span class="label-info-value" title="${escapeHtml(orgName)}">${escapeHtml(orgName)}</span>
+                        </div>
+                        <div class="label-info-row">
+                            <span class="label-info-label">责任人:</span>
+                            <span class="label-info-value" title="${escapeHtml(responsible)}">${escapeHtml(responsible)}</span>
+                        </div>
+                        <div class="label-info-row">
+                            <span class="label-info-label">存放地点:</span>
+                            <span class="label-info-value" title="${escapeHtml(location)}">${escapeHtml(location)}</span>
+                        </div>
+                    </div>
+                    <div class="label-qrcode">
+                        <div class="qrcode-wrapper" id="qr-${escapeHtml(asset.id)}"></div>
+                        <div class="qrcode-label">${escapeHtml(assetCode)}</div>
+                    </div>
+                </div>
+            `;
+
+            // 生成二维码（异步以确保 DOM 已附加）
+            setTimeout(() => {
+                const qrContainer = card.querySelector('.qrcode-wrapper');
+                if (qrContainer) {
+                    // 将资产信息直接编码到二维码中，扫码后无需访问服务器即可查看
+                    generateAssetQR(asset, qrContainer);
+                }
+            }, 0);
+
+            return card;
+        }
+
+        // ==================== 二维码生成（资产信息直接编码） ====================
+
+        // 正确的 UTF-8 编码（替代 qrcode.stringToBytes，后者不能正确处理中文）
+        function stringToUtf8Bytes(str) {
+            if (typeof TextEncoder !== 'undefined') {
+                return Array.from(new TextEncoder('utf-8').encode(str));
+            }
+            // 手动 UTF-8 编码（降级方案）
+            const bytes = [];
+            for (let i = 0; i < str.length; i++) {
+                let code = str.charCodeAt(i);
+                if (code < 0x80) {
+                    bytes.push(code);
+                } else if (code < 0x800) {
+                    bytes.push(0xC0 | (code >> 6), 0x80 | (code & 0x3F));
+                } else {
+                    bytes.push(0xE0 | (code >> 12), 0x80 | ((code >> 6) & 0x3F), 0x80 | (code & 0x3F));
+                }
+            }
+            return bytes;
+        }
+
+        // 创建纯文本资产信息（扫码后直接显示可读文字）
+        function createAssetText(asset) {
+            return '资产信息\n' +
+                '名称：' + (asset.type || '-') + '\n' +
+                '型号：' + (asset.configuration || '-') + '\n' +
+                '编码：' + (asset.id || '-') + '\n' +
+                '机构：' + (asset.owner || '-') + '\n' +
+                '责任人：' + (asset.user || '-') + '\n' +
+                '地点：' + (asset.location || '-');
+        }
+
+        // 生成资产二维码：用纯文本存储资产信息，扫码器直接显示可读内容
+        function generateAssetQR(asset, container) {
+            if (!container) return;
+            container.innerHTML = '';
+
+            if (typeof qrcode === 'undefined') {
+                console.error('qrcode 库未加载');
+                generatePlaceholderQR(container, 'QR');
+                return;
+            }
+
+            // 用纯文本存储资产信息，手机扫码器可直接显示
+            const text = createAssetText(asset);
+            // 正确的 UTF-8 编码（已修复 stringToBytes 不能正确编码中文的问题）
+            const bytes = stringToUtf8Bytes(text);
+
+            // 使用 H 级纠错 (30%) 提高扫码成功率
+            const qr = qrcode(0, 'H');
+            qr.addData(bytes, 'Byte');
+            qr.make();
+
+            drawQRCode(qr, container);
+            console.log('二维码生成成功，模块数:', qr.getModuleCount(), '内容长度:', text.length);
+        }
+
+        // 在 canvas 上绘制 QR 码
+        function drawQRCode(qr, container) {
+            const moduleCount = qr.getModuleCount();
+            const quietZone = 8;
+            const scale = 8;
+            const totalSize = (moduleCount + quietZone * 2) * scale;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = totalSize;
+            canvas.height = totalSize;
+            canvas.style.width = '100%';
+            canvas.style.height = '100%';
+            canvas.style.display = 'block';
+            canvas.style.imageRendering = 'pixelated';
+
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = false;
+
+            // 白底
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, totalSize, totalSize);
+
+            // 逐模块绘制
+            ctx.fillStyle = '#000000';
+            for (let r = 0; r < moduleCount; r++) {
+                for (let c = 0; c < moduleCount; c++) {
+                    if (qr.isDark(r, c)) {
+                        ctx.fillRect(
+                            (c + quietZone) * scale,
+                            (r + quietZone) * scale,
+                            scale,
+                            scale
+                        );
+                    }
+                }
+            }
+
+            container.appendChild(canvas);
+        }
+
+        function generateQRCode(text, container) {
+            if (!container) return;
+            container.innerHTML = '';
+
+            if (typeof qrcode === 'undefined') {
+                console.error('qrcode 库未加载');
+                generatePlaceholderQR(container, text);
+                return;
+            }
+
+            try {
+                const qr = qrcode(0, 'M');
+                // 正确的 UTF-8 编码（已修复 stringToBytes 不能正确编码中文的问题）
+                const bytes = stringToUtf8Bytes(String(text || ''));
+                qr.addData(bytes, 'Byte');
+                qr.make();
+                drawQRCode(qr, container);
+                console.log('二维码生成成功:', text.substring(0, 50), '模块数:', qr.getModuleCount());
+            } catch (e) {
+                console.error('QR 生成失败:', e);
+                generatePlaceholderQR(container, text);
+            }
+        }
+
+        // 占位 QR 码（降级方案）
+        function generatePlaceholderQR(container, text) {
+            container.innerHTML = '';
+            const canvas = document.createElement('canvas');
+            canvas.width = 100;
+            canvas.height = 100;
+            canvas.style.width = '100%';
+            canvas.style.height = '100%';
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, 100, 100);
+            ctx.fillStyle = '#000';
+            ctx.font = '8px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('QR', 50, 50);
+            ctx.fillText(String(text || '').substring(0, 10), 50, 62);
+            container.appendChild(canvas);
+        }
+
+        // ==================== 打印记录管理 ====================
+        function getPrintedSet() {
+            try {
+                const data = localStorage.getItem(PRINT_RECORD_KEY);
+                if (!data) return new Set();
+                const arr = JSON.parse(data);
+                return Array.isArray(arr) ? new Set(arr) : new Set();
+            } catch (e) {
+                return new Set();
+            }
+        }
+
+        function savePrintedSet(set) {
+            try {
+                localStorage.setItem(PRINT_RECORD_KEY, JSON.stringify(Array.from(set)));
+            } catch (e) {
+                console.warn('保存打印记录失败:', e);
+            }
+        }
+
+        function markAsPrinted(assetIds) {
+            const set = getPrintedSet();
+            assetIds.forEach(id => set.add(id));
+            savePrintedSet(set);
+        }
+
+        // ==================== 事件处理 ====================
+        function bindEvents() {
+            // 返回按钮
+            document.getElementById('btn-back').addEventListener('click', goBack);
+
+            // 打印按钮
+            document.getElementById('btn-print').addEventListener('click', () => {
+                const cards = labelsContainer.querySelectorAll('.label-card');
+                if (cards.length === 0) {
+                    alert('没有可打印的标签');
+                    return;
+                }
+
+                // 记录打印状态
+                const ids = Array.from(cards).map(c => c.dataset.assetId);
+                markAsPrinted(ids);
+
+                // 显示打印说明后再打印
+                showPrintDialog(() => {
+                    window.print();
+                    // 打印完成后刷新显示
+                    setTimeout(() => {
+                        filterAndRender();
+                    }, 500);
+                });
+            });
+
+            // 标签切换
+            document.querySelectorAll('.tabs .tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    currentFilter = tab.dataset.filter;
+                    filterAndRender();
+                });
+            });
+        }
+
+        // 打印前的说明对话框
+        function showPrintDialog(onConfirm) {
+            const cards = labelsContainer.querySelectorAll('.label-card');
+            const count = cards.length;
+
+            const html = `
+                <div id="print-dialog-mask" style="
+                    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                    background: rgba(0,0,0,0.5); z-index: 9999;
+                    display: flex; align-items: center; justify-content: center;">
+                    <div style="
+                        background: #fff; border-radius: 8px; padding: 24px;
+                        max-width: 460px; width: 90%;
+                        box-shadow: 0 4px 24px rgba(0,0,0,0.15);">
+                        <h3 style="margin:0 0 12px; font-size: 16px; color: #333;">
+                            <i class="fas fa-print" style="color: #1890ff;"></i> 打印前请确认打印机设置
+                        </h3>
+                        <div style="font-size: 13px; color: #555; line-height: 1.85;">
+                            <p style="margin: 0 0 10px;">即将打印 <strong style="color: #1890ff;">${count}</strong> 张资产标签 (70×50mm)</p>
+                            <div style="background: #fffbe6; border: 1px solid #ffe58f; padding: 10px 12px; border-radius: 4px; margin-bottom: 10px;">
+                                <p style="margin: 0 0 6px; color: #d48806; font-weight: bold;">⚠️ 请在打印对话框中确认以下设置：</p>
+                                <ol style="margin: 0; padding-left: 18px; line-height: 1.9; color: #555;">
+                                    <li>纸张尺寸：选择 <strong style="color: #333;">70×50mm</strong>（或 "自定义"）</li>
+                                    <li>纸张方向：<strong style="color: #333;">纵向</strong></li>
+                                    <li>缩放：<strong style="color: #333;">100%</strong>（实际大小）</li>
+                                    <li>边距：<strong style="color: #333;">无/最小</strong></li>
+                                    <li>取消勾选<strong>页眉和页脚</strong></li>
+                                </ol>
+                            </div>
+                            <p style="margin: 0; font-size: 12px; color: #999;">
+                                💡 如找不到 70×50mm 纸张，请先在"打印机属性"中添加自定义纸张尺寸
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end;">
+                            <button id="print-cancel" style="
+                                padding: 8px 16px; border: 1px solid #d9d9d9;
+                                border-radius: 4px; background: #fff; color: #666;
+                                cursor: pointer; font-size: 14px; transition: all 0.2s;">取消</button>
+                            <button id="print-confirm" style="
+                                padding: 8px 16px; border: none;
+                                border-radius: 4px; background: #1890ff; color: #fff;
+                                cursor: pointer; font-size: 14px; transition: all 0.2s;">开始打印</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const temp = document.createElement('div');
+            temp.innerHTML = html.trim();
+            const mask = temp.firstChild;
+            document.body.appendChild(mask);
+
+            mask.querySelector('#print-cancel').addEventListener('click', () => {
+                mask.remove();
+            });
+            mask.querySelector('#print-confirm').addEventListener('click', () => {
+                mask.remove();
+                onConfirm();
+            });
+        }
+
+        // ==================== 返回功能 ====================
+        function goBack() {
+            if (window.history.length > 1 && document.referrer) {
+                window.history.back();
+                return;
+            }
+            try {
+                window.close();
+            } catch (e) {
+                // 忽略
+            }
+            setTimeout(() => {
+                window.location.href = 'index.html';
+            }, 100);
+        }
+
+        // ==================== 工具函数 ====================
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // ==================== 初始化 ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            bindEvents();
+            loadAssets().catch(err => {
+                console.error('初始化失败:', err);
+                labelsContainer.innerHTML = '<div class="empty-tip">数据加载失败，请检查服务器是否运行</div>';
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+{
+  "name": "asset-management-system",
+  "version": "2.4.0",
+  "description": "电脑固定资产管理系统 - 便携式桌面应用",
+  "main": "electron/main.js",
+  "author": "Asset Management Team",
+  "license": "MIT",
+  "scripts": {
+    "start": "set ELECTRON_DEV=1 && electron .",
+    "dev": "set ELECTRON_DEV=1 && electron .",
+    "build": "electron-builder --win portable",
+    "build:dir": "electron-builder --win --dir",
+    "build:all": "electron-builder --win nsis portable",
+    "pack": "electron-builder --win portable --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.asset.management.system",
+    "productName": "电脑资产管理系统",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "js/**/*",
+      "libs/**/*",
+      "data/**/*",
+      "simple_server.js",
+      "index.html",
+      "styles.css",
+      "asset_label_print.html",
+      "final_chart_fix.js"
+    ],
+    "extraResources": [
+      {
+        "from": "data",
+        "to": "data"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "资产管理系统_v${version}_便携版.${ext}"
+    },
+    "portable": {
+      "artifactName": "资产管理系统_v${version}_便携版.${ext}"
+    }
+  }
+}
