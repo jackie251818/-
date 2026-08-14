@@ -423,9 +423,12 @@ async function createWindow() {
     Menu.setApplicationMenu(null);
     mainWindow.setMenuBarVisibility(false);
 
-    // 阻止默认标题
-    mainWindow.on('page-title-updated', (event) => {
+    // 页面标题更新时，显式同步到 Electron 窗口标题（确保窗口标题栏跟随系统名称变化）
+    mainWindow.on('page-title-updated', (event, title) => {
         event.preventDefault();
+        if (mainWindow && title) {
+            mainWindow.setTitle(title);
+        }
     });
 
     // 外部链接在系统默认浏览器中打开

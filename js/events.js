@@ -81,6 +81,24 @@ function bindDataDependentEventListeners() {
             alert('设置已保存');
         });
         
+        // 系统名称输入时实时更新标题（无需等待保存）
+        const systemNameInput = document.getElementById('system-name');
+        if (systemNameInput) {
+            systemNameInput.addEventListener('input', function() {
+                updateSystemTitle(this.value);
+            });
+        }
+        
+        // 重置设置后同步更新标题
+        const settingsForm = document.getElementById('settings-form');
+        if (settingsForm) {
+            settingsForm.addEventListener('reset', function() {
+                setTimeout(() => {
+                    updateSystemTitle();
+                }, 0);
+            });
+        }
+        
         // 清空所有数据
         document.getElementById('clear-all-data').addEventListener('click', function() {
             if (confirm('确定要清空所有资产数据吗？此操作不可恢复！')) {
