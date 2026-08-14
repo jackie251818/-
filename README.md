@@ -37,8 +37,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/jackie251818/-.git
-cd 固定资产管理系统v2.4
+git clone https://github.com/jackie251818/asset-management-system.git
+cd asset-management-system
 
 # 安装依赖（仅 better-sqlite3）
 npm install
