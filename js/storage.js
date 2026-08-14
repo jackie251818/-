@@ -927,6 +927,291 @@ class FileStorageManager {
         }
     }
 
+    // ============ SQLite REST API（离线优先：IndexedDB缓存 + /db/* API）============
+
+    // 字段映射：数据库snake_case ↔ 前端camelCase
+    static get _DB_FIELD_MAP() {
+        return {
+            id: 'id', owner: 'owner', brandModel: 'brand_model',
+            type: 'type', user: 'user', department: 'department',
+            status: 'status', purchaseDate: 'purchase_date',
+            location: 'location', description: 'description',
+            attachments: 'attachments', maintenanceRecords: 'maintenance_records',
+            createdAt: 'created_at', updatedAt: 'updated_at'
+        };
+    }
+
+    // API路径映射（仅列出需要 SQLite 同步的键，其他键仅使用 IndexedDB + localStorage）
+    static get _DB_ENDPOINTS() {
+        return {
+            'assetManagementData': '/db/assets',
+            'userStateData': '/db/user-state',
+            'custom_options_owner': '/db/options/owner',
+            'custom_options_type': '/db/options/type',
+            'custom_options_department': '/db/options/department',
+            'custom_options_owner_deleted': '/db/options/owner',
+            'custom_options_type_deleted': '/db/options/type',
+            'custom_options_department_deleted': '/db/options/department'
+        };
+    }
+
+    /**
+     * 判断 IndexedDB 数据与 SQLite 数据是否需要同步
+     * @param {*} idbData - IndexedDB 中的数据
+     * @param {*} dbData - 从 SQLite 加载的数据
+     * @param {string} key - 数据键名
+     * @returns {boolean} true 表示需要用 SQLite 数据覆盖 IndexedDB
+     */
+    _needsBackgroundSync(idbData, dbData, key) {
+        try {
+            // 数组类型：先比较长度，再比较 ID 集合（轻量级）
+            if (Array.isArray(idbData) && Array.isArray(dbData)) {
+                if (idbData.length !== dbData.length) return true;
+                // 大数组只比较 ID 集合，避免全量 JSON 序列化
+                if (idbData.length > 20 && idbData[0] && idbData[0].id) {
+                    const idbIds = idbData.map(a => a.id).sort().join(',');
+                    const dbIds = dbData.map(a => a.id).sort().join(',');
+                    return idbIds !== dbIds;
+                }
+                // 小数组可以做完整比较
+                return JSON.stringify(idbData) !== JSON.stringify(dbData);
+            }
+            // 对象类型：比较 JSON
+            if (typeof idbData === 'object' && typeof dbData === 'object' && idbData !== null && dbData !== null) {
+                return JSON.stringify(idbData) !== JSON.stringify(dbData);
+            }
+            // 基本类型
+            return idbData !== dbData;
+        } catch(e) {
+            return false;
+        }
+    }
+
+    // 检查 /db/* API 是否可用
+    async _isDbApiReady() {
+        if (this._dbChecked) return this._dbApiReady;
+        this._dbChecked = true;
+        try {
+            const resp = await fetch('/db/stats', { method: 'GET', cache: 'no-store' });
+            this._dbApiReady = resp.ok;
+        } catch (e) {
+            this._dbApiReady = false;
+        }
+        if (this._dbApiReady) {
+            Logger.info('Storage', 'SQLite /db/* API 可用');
+        }
+        return this._dbApiReady;
+    }
+
+    /**
+     * 前端资产对象 → 数据库字段（camelCase → snake_case）
+     */
+    _assetToDb(asset) {
+        const map = FileStorageManager._DB_FIELD_MAP;
+        const obj = {};
+        for (const [from, to] of Object.entries(map)) {
+            obj[to] = asset[from] ?? '';
+        }
+        // attachments 和 maintenanceRecords 直接存JSON字符串
+        obj.attachments = JSON.stringify(asset.attachments || []);
+        obj.maintenance_records = JSON.stringify(asset.maintenanceRecords || []);
+        return obj;
+    }
+
+    /**
+     * 数据库记录 → 前端资产对象（snake_case → camelCase）
+     */
+    _dbToAsset(row) {
+        if (!row) return null;
+        return {
+            id: row.id || '',
+            owner: row.owner || '',
+            brandModel: row.brand_model || '',
+            type: row.type || '',
+            user: row.user || '',
+            department: row.department || '',
+            status: row.status || '在用',
+            purchaseDate: row.purchase_date || '',
+            location: row.location || '',
+            description: row.description || '',
+            attachments: typeof row.attachments === 'string' ? JSON.parse(row.attachments || '[]') : (row.attachments || []),
+            maintenanceRecords: typeof row.maintenance_records === 'string' ? JSON.parse(row.maintenance_records || '[]') : (row.maintenance_records || []),
+            createdAt: row.created_at || '',
+            updatedAt: row.updated_at || ''
+        };
+    }
+
+    /**
+     * 从 /db/* API 加载数据
+     */
+    async _loadFromDb(key) {
+        const endpoint = FileStorageManager._DB_ENDPOINTS[key];
+        if (!endpoint) return null;
+
+        try {
+            let data;
+            if (key === 'assetManagementData') {
+                // 资产列表：分页全量获取
+                const allAssets = [];
+                let page = 1;
+                const pageSize = 200;
+                while (true) {
+                    const resp = await fetch(`${endpoint}?page=${page}&pageSize=${pageSize}`, { cache: 'no-store' });
+                    if (!resp.ok) break;
+                    const result = await resp.json();
+                    if (!result.success || !result.data?.length) break;
+                    allAssets.push(...result.data);
+                    if (allAssets.length >= result.total) break;
+                    page++;
+                }
+                data = allAssets.map(row => this._dbToAsset(row));
+            } else if (key === 'userStateData') {
+                const resp = await fetch(endpoint, { cache: 'no-store' });
+                if (!resp.ok) return null;
+                const result = await resp.json();
+                if (!result.success) return null;
+                const state = result.data;
+                data = {
+                    currentPage: state.current_page || 1,
+                    currentView: state.current_view || 'dashboard',
+                    currentZoom: state.current_zoom || 1,
+                    systemSettings: state.system_settings || {},
+                    filters: state.filters || {}
+                };
+            } else if (key.startsWith('custom_options_')) {
+                // 对 _deleted 后缀的键，请求时加上 includeDeleted 参数
+                const includeDeleted = key.endsWith('_deleted');
+                const url = includeDeleted ? `${endpoint}?includeDeleted=true` : endpoint;
+                const resp = await fetch(url, { cache: 'no-store' });
+                if (!resp.ok) return null;
+                const result = await resp.json();
+                if (result.success && Array.isArray(result.data)) {
+                    if (includeDeleted) {
+                        // includeDeleted=true → 返回对象数组 [{ value, is_deleted }]
+                        data = result.data
+                            .filter(item => item.is_deleted === 1)
+                            .map(item => item.value);
+                    } else {
+                        // includeDeleted=false → 返回字符串数组
+                        data = result.data;
+                    }
+                } else {
+                    data = result.success ? result.data : null;
+                }
+            }
+
+            if (data !== null && data !== undefined) {
+                Logger.info('Storage', `从 /db/* 加载数据: ${key}`, Array.isArray(data) ? `${data.length} 条` : '');
+            }
+            return data;
+        } catch (e) {
+            Logger.warn('Storage', `从 /db/* 加载失败: ${key}`, e.message);
+            return null;
+        }
+    }
+
+    /**
+     * 保存数据到 /db/* API
+     */
+    async _saveToDb(key, data) {
+        const endpoint = FileStorageManager._DB_ENDPOINTS[key];
+        if (!endpoint) return false;
+
+        try {
+            if (key === 'assetManagementData' && Array.isArray(data)) {
+                // 资产列表：批量 upsert + 删除已移除的资产
+                const currentIds = new Set(data.map(a => a.id));
+
+                // 获取数据库中现有的所有资产 ID
+                const allAssetsResp = await fetch('/db/assets?page=1&pageSize=1000', { cache: 'no-store' }).catch(() => null);
+                let existingIds = new Set();
+                if (allAssetsResp && allAssetsResp.ok) {
+                    const result = await allAssetsResp.json();
+                    if (result.success && Array.isArray(result.data)) {
+                        result.data.forEach(a => { if (a && a.id) existingIds.add(a.id); });
+                    }
+                }
+
+                // 删除已不在数据中的资产
+                for (const id of existingIds) {
+                    if (!currentIds.has(id)) {
+                        await fetch(`/db/assets/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+                    }
+                }
+
+                // 批量 upsert 当前资产
+                for (const asset of data) {
+                    const dbObj = this._assetToDb(asset);
+                    const isNew = !existingIds.has(asset.id);
+                    if (isNew) {
+                        await fetch('/db/assets', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(dbObj)
+                        });
+                    } else {
+                        await fetch(`/db/assets/${encodeURIComponent(asset.id)}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(dbObj)
+                        });
+                    }
+                }
+
+                Logger.info('Storage', `保存到 /db/*: ${key} (${data.length} 条, 删除 ${existingIds.size - currentIds.size} 条)`);
+                return true;
+            } else if (key === 'userStateData' && typeof data === 'object') {
+                const payload = {
+                    currentPage: data.currentPage || 1,
+                    currentView: data.currentView || 'dashboard',
+                    currentZoom: data.currentZoom || 1,
+                    systemSettings: data.systemSettings || {},
+                    filters: data.filters || {}
+                };
+                const resp = await fetch(endpoint, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                return resp.ok;
+            } else if (key.startsWith('custom_options_')) {
+                // 自定义选项：全量替换（正常选项）或标记删除
+                let deletedValues = [];
+                // 查找对应的已删除选项
+                const deletedKey = key + '_deleted';
+                if (key.endsWith('_deleted')) {
+                    // 已是删除列表，将 data 作为 deletedValues 发送
+                    deletedValues = Array.isArray(data) ? data : [];
+                    const category = key.replace('custom_options_', '').replace('_deleted', '');
+                    // 获取当前正常选项并一起保存
+                    const normalKey = 'custom_options_' + category;
+                    const normalData = await this._loadFromIndexedDB(normalKey).catch(() => []);
+                    const payload = {
+                        values: Array.isArray(normalData) ? normalData : [],
+                        deletedValues: deletedValues
+                    };
+                    const resp = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    }).catch(() => null);
+                    return resp ? resp.ok : false;
+                } else {
+                    const payload = { values: Array.isArray(data) ? data : [] };
+                    const resp = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    }).catch(() => null);
+                    return resp ? resp.ok : false;
+                }
+            }
+        } catch (e) {
+            Logger.warn('Storage', `保存到 /db/* 失败: ${key}`, e.message);
+            return false;
+        }
+    }
+
     // ============ localStorage 兼容 ============
 
     _saveToLocalStorage(key, data) {
@@ -1006,26 +1291,38 @@ class FileStorageManager {
     async setItem(key, data) {
         Logger.debug('Storage', 'setItem:', key);
 
-        if (this.fileApiReady) {
-            // 服务器模式
-            await this._saveToServer(key, data);
-            this._saveToLocalStorage(key, data);
-        } else {
-            // 本地模式：IndexedDB + localStorage
-            await this._saveToIndexedDB(key, data);
-            await this._saveToIndexedDB(`__ts_${key}__`, Date.now());  // 保存时间戳
-            this._saveToLocalStorage(key, data);
+        // === 离线优先：同步写 IndexedDB + localStorage，尽快同步到 SQLite ===
+        const dbReady = await this._isDbApiReady();
 
-            // 同步保存到 .js 文件（File System Access API 优先，降级触发下载）
+        // 1. 同步写入 IndexedDB（离线立即可用）
+        await this._saveToIndexedDB(key, data);
+        await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
+
+        // 2. 同步写入 localStorage（轻量缓存）
+        this._saveToLocalStorage(key, data);
+
+        // 3. 同步同步到 SQLite（等待完成，确保持久化）
+        if (dbReady) {
+            try {
+                await this._saveToDb(key, data);
+            } catch(e) {
+                Logger.warn('Storage', `保存到 /db/* 失败: ${key}`, e.message);
+            }
+        }
+
+        // 4. 旧有服务器模式兼容
+        if (this.fileApiReady) {
+            await this._saveToServer(key, data);
+        } else if (!dbReady) {
+            // 本地模式且SQLite不可用时，保留原有文件同步逻辑
             if (this.dataDirHandle) {
                 await this._saveToScriptFile(key, data);
             } else if (this.isFileSyncEnabled && this.fileSystemHandle) {
-                // 数据文件夹已连接但 dataDirHandle 丢失（刷新后未恢复），尝试恢复
                 try {
                     try {
                         this.dataDirHandle = await this.fileSystemHandle.getDirectoryHandle('data', { create: true });
                     } catch(e) {
-                        this.dataDirHandle = this.fileSystemHandle;  // 直接选了 data 目录
+                        this.dataDirHandle = this.fileSystemHandle;
                     }
                     await this._saveToScriptFile(key, data);
                 } catch(e) {
@@ -1040,113 +1337,108 @@ class FileStorageManager {
     async getItem(key) {
         Logger.debug('Storage', 'getItem:', key);
 
-        // 等待完整初始化完成（包括 IndexedDB、File System Access API 恢复）
+        // 等待完整初始化完成
         if (this._initPromise) {
             try {
                 await this._initPromise;
             } catch(e) {}
         }
 
+        // === 离线优先读取策略 ===
+        const dbReady = await this._isDbApiReady();
+
+        // 1. 优先从 IndexedDB 缓存读取（零延迟，离线可用）
+        const idbData = await this._loadFromIndexedDB(key);
+        if (idbData !== null && idbData !== undefined) {
+            // 如果 SQLite 可用，后台检查是否有更新
+            if (dbReady) {
+                Promise.resolve().then(async () => {
+                    try {
+                        const dbData = await this._loadFromDb(key);
+                        if (dbData !== null && dbData !== undefined) {
+                            const needsSync = this._needsBackgroundSync(idbData, dbData, key);
+                            if (needsSync) {
+                                await this._saveToIndexedDB(key, dbData);
+                                await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
+                                this._saveToLocalStorage(key, dbData);
+                                Logger.info('Storage', `[后台同步] ${key}: SQLite 数据已同步到 IndexedDB`);
+                                if (typeof renderAllAssets === 'function' && key === STORAGE_KEYS.ASSET_MANAGEMENT_DATA) {
+                                    renderAllAssets();
+                                }
+                            }
+                        }
+                    } catch(e) { /* 后台同步静默失败 */ }
+                });
+            }
+            return idbData;
+        }
+
+        // 2. IndexedDB 无数据，尝试从 SQLite API 加载（首次加载）
+        if (dbReady) {
+            const dbData = await this._loadFromDb(key);
+            if (dbData !== null && dbData !== undefined) {
+                // 回填到 IndexedDB + localStorage
+                await this._saveToIndexedDB(key, dbData);
+                await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
+                this._saveToLocalStorage(key, dbData);
+                Logger.info('Storage', `首次加载: 从 /db/* 初始化数据: ${key}`);
+                return dbData;
+            }
+        }
+
+        // 3. 旧有服务器模式回退
         if (this.fileApiReady) {
-            // 服务器模式：服务器 → window.__LOCAL_DATA__ → localStorage 回退
             const serverData = await this._loadFromServer(key);
             if (serverData !== null) {
                 this._saveToLocalStorage(key, serverData);
                 return serverData;
             }
-            // 服务器没有数据，尝试从 window.__LOCAL_DATA__ 初始化（.js 文件数据）
             if (typeof window.__LOCAL_DATA__ !== 'undefined' && window.__LOCAL_DATA__[key] !== undefined) {
                 const scriptData = window.__LOCAL_DATA__[key];
-                // 保存到服务器，供其他浏览器使用
                 await this._saveToServer(key, scriptData);
                 this._saveToLocalStorage(key, scriptData);
                 Logger.info('Storage', `从 .js 文件初始化服务器数据: ${key}`);
                 return scriptData;
             }
             return this._loadFromLocalStorage(key);
-        } else {
-            // 本地模式数据优先级：
-            // 1. 如果文件同步已启用：优先用 window.__LOCAL_DATA__（data/*.js 文件数据，跨浏览器共享）
-            // 2. 如果文件同步未启用：优先用 IndexedDB（当前浏览器的数据），首次加载用 window.__LOCAL_DATA__
-            // 3. localStorage（降级）
-
-            if (typeof window.__LOCAL_DATA__ !== 'undefined' && window.__LOCAL_DATA__[key] !== undefined) {
-                const scriptData = window.__LOCAL_DATA__[key];
-
-                // 先尝试从 IndexedDB 读取，用于比较
-                const idbData = await this._loadFromIndexedDB(key);
-                const idbTs = await this._loadFromIndexedDB(`__ts_${key}__`);  // IndexedDB 保存时间戳
-                const hasIdbData = idbData !== null && typeof idbData !== 'undefined';
-
-                // 计算数据量（用于简单比较哪边数据更新/更多）
-                function dataSize(d) {
-                    if (Array.isArray(d)) return d.length;
-                    if (d && typeof d === 'object') return Object.keys(d).length;
-                    if (d !== null && d !== undefined) return 1;
-                    return 0;
-                }
-                const scriptSize = dataSize(scriptData);
-                const idbSize = hasIdbData ? dataSize(idbData) : 0;
-
-                if (this.isFileSyncEnabled) {
-                    // 文件同步已启用：取"数据量更大"的一方作为可信源，防止丢失数据
-                    // （connectDataFolder 时已做过同步，但 setItem 可能因异常只写了一边）
-                    let finalData;
-                    let sourceDesc;
-
-                    if (hasIdbData && idbSize > scriptSize) {
-                        // IndexedDB 数据量更大（说明用户在当前浏览器改过，setItem 未成功写文件）
-                        finalData = idbData;
-                        sourceDesc = `IndexedDB (${idbSize} > ${scriptSize})`;
-                        // 立即补写回 .js 文件，保持同步
-                        if (this.dataDirHandle) {
-                            await this._saveToScriptFile(key, finalData);
-                            await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
-                        }
-                    } else if (scriptSize > 0 || !hasIdbData) {
-                        // .js 文件有数据（可能来自其他浏览器的最新写入），或 IndexedDB 为空
-                        finalData = scriptData;
-                        sourceDesc = `data/*.js (${scriptSize}条)`;
-                        // 同步到 IndexedDB
-                        await this._saveToIndexedDB(key, scriptData);
-                        await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
-                    } else {
-                        // 两边都空，用空数据
-                        finalData = scriptData;
-                        sourceDesc = '空数据';
-                    }
-
-                    Logger.info('Storage', `[文件同步] ${key}: 选择来源=${sourceDesc}`);
-                    delete window.__LOCAL_DATA__[key];
-                    return finalData;
-                } else {
-                    // 文件同步未启用：优先用 IndexedDB（当前浏览器修改过的数据）
-                    if (hasIdbData) {
-                        Logger.debug('Storage', `使用 IndexedDB 数据（文件同步未启用）: ${key}（${idbSize}条）`);
-                        delete window.__LOCAL_DATA__[key];
-                        return idbData;
-                    } else {
-                        // IndexedDB 为空（首次使用），用 data/*.js 文件数据初始化
-                        await this._saveToIndexedDB(key, scriptData);
-                        await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
-                        Logger.info('Storage', `首次加载: 从 data/*.js 初始化数据到 IndexedDB: ${key}（${scriptSize}条）`);
-                        delete window.__LOCAL_DATA__[key];
-                        return scriptData;
-                    }
-                }
-            }
-
-            // window.__LOCAL_DATA__ 已被消费或不存在，从 IndexedDB 读取
-            const idbData = await this._loadFromIndexedDB(key);
-            if (idbData !== null) {
-                return idbData;
-            }
-
-            return this._loadFromLocalStorage(key);
         }
+
+        // 4. 本地模式回退（file:// 协议或 SQLite 不可用）
+        if (typeof window.__LOCAL_DATA__ !== 'undefined' && window.__LOCAL_DATA__[key] !== undefined) {
+            const scriptData = window.__LOCAL_DATA__[key];
+            await this._saveToIndexedDB(key, scriptData);
+            await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
+            this._saveToLocalStorage(key, scriptData);
+            Logger.info('Storage', `首次加载: 从 data/*.js 初始化数据: ${key}`);
+            delete window.__LOCAL_DATA__[key];
+            return scriptData;
+        }
+
+        // 5. 最终降级：localStorage
+        return this._loadFromLocalStorage(key);
     }
 
     async removeItem(key) {
+        // === SQLite 删除（异步，不阻塞）===
+        const dbReady = await this._isDbApiReady();
+        if (dbReady) {
+            Promise.resolve().then(() => {
+                const endpoint = FileStorageManager._DB_ENDPOINTS[key];
+                if (endpoint) {
+                    if (key === 'assetManagementData') {
+                        // 删除所有资产
+                        fetch('/db/assets', { method: 'DELETE' }).catch(() => {});
+                    } else if (key === 'userStateData') {
+                        fetch('/db/user-state', { method: 'DELETE' }).catch(() => {});
+                    } else if (key.startsWith('custom_options_')) {
+                        const category = key.replace('custom_options_', '');
+                        fetch(`/db/options/${category}`, { method: 'DELETE' }).catch(() => {});
+                    }
+                }
+            });
+        }
+
+        // 旧有服务器模式
         if (this.fileApiReady) {
             try {
                 await fetch(`/api/delete?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
@@ -1160,6 +1452,354 @@ class FileStorageManager {
         }
         
         localStorage.removeItem(key);
+    }
+
+    // ============ 数据一致性检查 ============
+
+    /**
+     * 逐条对比资产数据，检测到字段级冲突
+     * @param {Array} idbAssets - IndexedDB 中的资产数组
+     * @param {Array} dbAssets - SQLite 中的资产数组
+     * @returns {{conflicts: Array, idbOnly: Array, dbOnly: Array}}
+     */
+    _detectAssetConflicts(idbAssets, dbAssets) {
+        const idbMap = new Map(idbAssets.map(a => [a.id, a]));
+        const dbMap = new Map(dbAssets.map(a => [a.id, a]));
+        const conflicts = [];
+        const idbOnly = [];
+        const dbOnly = [];
+
+        // IndexedDB 独有的资产（离线新增）
+        for (const [id, asset] of idbMap) {
+            if (!dbMap.has(id)) {
+                idbOnly.push(id);
+                continue;
+            }
+            // 双方都有，逐字段比较
+            const dbAsset = dbMap.get(id);
+            const diffFields = [];
+            const fieldsToCompare = ['owner', 'brandModel', 'type', 'user', 'department',
+                'status', 'purchaseDate', 'location', 'description'];
+
+            for (const field of fieldsToCompare) {
+                const idbVal = asset[field] ?? '';
+                const dbVal = dbAsset[field] ?? '';
+                if (String(idbVal) !== String(dbVal)) {
+                    diffFields.push({ field, idbValue: idbVal, dbValue: dbVal });
+                }
+            }
+
+            // 比较附件
+            const idbAtt = JSON.stringify(asset.attachments || []);
+            const dbAtt = JSON.stringify(dbAsset.attachments || []);
+            if (idbAtt !== dbAtt) {
+                diffFields.push({ field: 'attachments', idbValue: asset.attachments, dbValue: dbAsset.attachments });
+            }
+
+            // 比较维护记录
+            const idbMaint = JSON.stringify(asset.maintenanceRecords || []);
+            const dbMaint = JSON.stringify(dbAsset.maintenanceRecords || []);
+            if (idbMaint !== dbMaint) {
+                diffFields.push({ field: 'maintenanceRecords', idbValue: asset.maintenanceRecords, dbValue: dbAsset.maintenanceRecords });
+            }
+
+            if (diffFields.length > 0) {
+                conflicts.push({
+                    type: 'asset_field_diff',
+                    id: id,
+                    idbVersion: asset,
+                    dbVersion: dbAsset,
+                    diffFields
+                });
+            }
+        }
+
+        // SQLite 独有的资产（其他端新增）
+        for (const [id] of dbMap) {
+            if (!idbMap.has(id)) {
+                dbOnly.push(id);
+            }
+        }
+
+        return { conflicts, idbOnly, dbOnly };
+    }
+
+    /**
+     * 检测非数组数据的冲突
+     * @returns {{isConflict: boolean, idbVersion: *, dbVersion: *}}
+     */
+    _detectObjectConflict(idbData, dbData) {
+        const isConflict = JSON.stringify(idbData) !== JSON.stringify(dbData);
+        return { isConflict, idbVersion: idbData, dbVersion: dbData };
+    }
+
+    /**
+     * 手动触发 IndexedDB 与 SQLite 之间的数据一致性检查
+     * @param {Object} options - 选项
+     * @param {string} options.mode - 'auto'（自动同步，默认）或 'mark'（仅标记不覆盖）
+     * @returns {Promise<{success: boolean, message: string, results: Array, conflictCount?: number}>}
+     */
+    async reconcileAll(options = {}) {
+        const mode = options.mode === 'mark' ? 'mark' : 'auto';
+
+        // 强制重新检测 API 可用性（不复用缓存）
+        this._dbChecked = false;
+        this._dbApiReady = false;
+        const dbReady = await this._isDbApiReady();
+
+        if (!dbReady) {
+            return {
+                success: false,
+                message: '后端服务不可用，无法执行一致性检查。请确认服务器已启动后再试。',
+                results: []
+            };
+        }
+
+        const keys = [
+            'assetManagementData',
+            'userStateData',
+            'custom_options_owner',
+            'custom_options_type',
+            'custom_options_department',
+            'custom_options_owner_deleted',
+            'custom_options_type_deleted',
+            'custom_options_department_deleted'
+        ];
+
+        const results = [];
+        let fixedCount = 0;
+        let inSyncCount = 0;
+        let conflictCount = 0;
+        const allConflicts = [];
+
+        for (const key of keys) {
+            try {
+                const idbData = await this._loadFromIndexedDB(key);
+                const dbData = await this._loadFromDb(key);
+
+                const idbExists = idbData !== null && idbData !== undefined;
+                const dbExists = dbData !== null && dbData !== undefined;
+
+                if (!idbExists && !dbExists) {
+                    results.push({ key, action: 'skip', status: 'no_data', detail: '双方均无数据' });
+                    continue;
+                }
+
+                if (idbExists && !dbExists) {
+                    // IndexedDB 有数据，SQLite 无 → 推送到 SQLite（两种模式都安全执行）
+                    await this._saveToDb(key, idbData);
+                    results.push({ key, action: 'push_to_db', status: 'fixed', detail: 'IndexedDB → SQLite' });
+                    fixedCount++;
+                    continue;
+                }
+
+                if (!idbExists && dbExists) {
+                    // SQLite 有数据，IndexedDB 无 → 拉取到 IndexedDB
+                    await this._saveToIndexedDB(key, dbData);
+                    await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
+                    this._saveToLocalStorage(key, dbData);
+                    results.push({ key, action: 'pull_to_idb', status: 'fixed', detail: 'SQLite → IndexedDB' });
+                    fixedCount++;
+                    continue;
+                }
+
+                // 双方都有数据
+                if (key === 'assetManagementData' && Array.isArray(idbData) && Array.isArray(dbData)) {
+                    // 资产数据：逐条对比
+                    const { conflicts, idbOnly, dbOnly } = this._detectAssetConflicts(idbData, dbData);
+                    const totalIssues = conflicts.length + idbOnly.length + dbOnly.length;
+
+                    if (totalIssues === 0) {
+                        results.push({ key, action: 'none', status: 'in_sync', detail: '数据一致' });
+                        inSyncCount++;
+                        continue;
+                    }
+
+                    if (mode === 'mark') {
+                        // 标记模式：记录冲突，不覆盖
+                        const conflictRecord = {
+                            key,
+                            detectedAt: new Date().toISOString(),
+                            conflicts,
+                            idbOnly,
+                            dbOnly,
+                            idbSnapshot: idbData,
+                            dbSnapshot: dbData
+                        };
+                        await this._saveToIndexedDB(`__conflict_${key}__`, conflictRecord);
+                        conflictCount += totalIssues;
+                        allConflicts.push({ key, conflicts, idbOnly, dbOnly });
+                        results.push({
+                            key,
+                            action: 'marked',
+                            status: 'conflict',
+                            detail: `发现 ${conflicts.length} 条字段冲突，${idbOnly.length} 条仅本地，${dbOnly.length} 条仅服务器`
+                        });
+                    } else {
+                        // auto 模式：IndexedDB 为准，直接同步
+                        await this._saveToDb(key, idbData);
+                        results.push({
+                            key,
+                            action: 'sync_idb_to_db',
+                            status: 'fixed',
+                            detail: `数据不一致（${conflicts.length} 条字段差异，${idbOnly.length} 条仅本地，${dbOnly.length} 条仅服务器），IndexedDB → SQLite`
+                        });
+                        fixedCount++;
+                    }
+                } else {
+                    // 非资产数据：整体比较
+                    const { isConflict, idbVersion, dbVersion } = this._detectObjectConflict(idbData, dbData);
+                    if (isConflict) {
+                        if (mode === 'mark') {
+                            const conflictRecord = {
+                                key,
+                                detectedAt: new Date().toISOString(),
+                                idbSnapshot: idbVersion,
+                                dbSnapshot: dbVersion
+                            };
+                            await this._saveToIndexedDB(`__conflict_${key}__`, conflictRecord);
+                            conflictCount++;
+                            allConflicts.push({ key, idbVersion, dbVersion });
+                            results.push({ key, action: 'marked', status: 'conflict', detail: '数据不一致，已标记待人工审查' });
+                        } else {
+                            await this._saveToDb(key, idbData);
+                            results.push({ key, action: 'sync_idb_to_db', status: 'fixed', detail: '数据不一致，IndexedDB → SQLite' });
+                            fixedCount++;
+                        }
+                    } else {
+                        results.push({ key, action: 'none', status: 'in_sync', detail: '数据一致' });
+                        inSyncCount++;
+                    }
+                }
+            } catch (e) {
+                results.push({ key, action: 'error', status: 'error', detail: e.message });
+            }
+        }
+
+        // 清理标记模式下已无冲突的旧标记
+        if (mode === 'mark') {
+            for (const key of keys) {
+                const hasConflict = allConflicts.some(c => c.key === key);
+                if (!hasConflict) {
+                    // 该 key 无冲突，清除旧标记
+                    if (this.indexedDBClient) {
+                        const tx = this.indexedDBClient.transaction(['data'], 'readwrite');
+                        tx.objectStore('data').delete(`__conflict_${key}__`);
+                    }
+                }
+            }
+        }
+
+        // auto 模式完成后清除所有冲突标记
+        if (mode === 'auto' && fixedCount > 0) {
+            for (const key of keys) {
+                if (this.indexedDBClient) {
+                    const tx = this.indexedDBClient.transaction(['data'], 'readwrite');
+                    tx.objectStore('data').delete(`__conflict_${key}__`);
+                }
+            }
+        }
+
+        // 同步完成后，刷新 UI 渲染
+        if ((mode === 'auto' && fixedCount > 0) && typeof renderAllAssets === 'function') {
+            renderAllAssets();
+        }
+
+        const summary = mode === 'mark'
+            ? `一致性检查完成（标记模式）：${conflictCount} 项冲突已标记，${inSyncCount} 项一致，${results.length - conflictCount - inSyncCount} 项跳过/出错。请前往冲突审查解决。`
+            : `一致性检查完成：${fixedCount} 项已修复，${inSyncCount} 项一致，${results.length - fixedCount - inSyncCount} 项跳过/出错。`;
+
+        return { success: true, message: summary, results, conflictCount };
+    }
+
+    /**
+     * 获取所有已标记的冲突
+     * @returns {Promise<Array>} 冲突列表
+     */
+    async getConflicts() {
+        const keys = [
+            'assetManagementData',
+            'userStateData',
+            'custom_options_owner',
+            'custom_options_type',
+            'custom_options_department',
+            'custom_options_owner_deleted',
+            'custom_options_type_deleted',
+            'custom_options_department_deleted'
+        ];
+        const conflicts = [];
+        for (const key of keys) {
+            const record = await this._loadFromIndexedDB(`__conflict_${key}__`);
+            if (record) {
+                conflicts.push({ key, ...record });
+            }
+        }
+        return conflicts;
+    }
+
+    /**
+     * 解决单个冲突
+     * @param {string} key - 数据键名
+     * @param {string} resolution - 'local'（用 IndexedDB）、'server'（用 SQLite）或 'merged'（用自定义数据）
+     * @param {*} mergedData - 当 resolution='merged' 时提供的合并后数据
+     */
+    async resolveConflict(key, resolution, mergedData = null) {
+        const conflictRecord = await this._loadFromIndexedDB(`__conflict_${key}__`);
+        if (!conflictRecord) {
+            return { success: false, message: `未找到 ${key} 的冲突记录` };
+        }
+
+        let resolvedData;
+        if (resolution === 'local') {
+            resolvedData = conflictRecord.idbSnapshot;
+        } else if (resolution === 'server') {
+            resolvedData = conflictRecord.dbSnapshot;
+        } else if (resolution === 'merged' && mergedData !== null) {
+            resolvedData = mergedData;
+        } else {
+            return { success: false, message: '无效的解决方案' };
+        }
+
+        // 写入双方
+        await this._saveToIndexedDB(key, resolvedData);
+        await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
+        this._saveToLocalStorage(key, resolvedData);
+        await this._saveToDb(key, resolvedData);
+
+        // 删除冲突标记
+        if (this.indexedDBClient) {
+            const tx = this.indexedDBClient.transaction(['data'], 'readwrite');
+            tx.objectStore('data').delete(`__conflict_${key}__`);
+        }
+
+        // 刷新 UI
+        if (key === 'assetManagementData' && typeof renderAllAssets === 'function') {
+            const loadedData = await this._loadFromIndexedDB(key);
+            if (loadedData && Array.isArray(loadedData)) {
+                assetsData = loadedData;
+                renderAllAssets();
+                if (typeof updateStatistics === 'function') updateStatistics();
+            }
+        }
+
+        return { success: true, message: `${key} 冲突已解决（策略：${resolution}）` };
+    }
+
+    /**
+     * 批量解决所有冲突
+     * @param {string} resolution - 'local' 或 'server'
+     */
+    async resolveAllConflicts(resolution) {
+        const conflicts = await this.getConflicts();
+        let resolvedCount = 0;
+        for (const c of conflicts) {
+            const result = await this.resolveConflict(c.key, resolution);
+            if (result.success) resolvedCount++;
+        }
+        return {
+            success: true,
+            message: `已批量解决 ${resolvedCount}/${conflicts.length} 个冲突（策略：${resolution === 'local' ? '以本地为准' : '以服务器为准'}）`
+        };
     }
 
     // ============ 数据导入/导出 ============

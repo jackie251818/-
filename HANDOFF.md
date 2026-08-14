@@ -1,7 +1,7 @@
 # 电脑固定资产管理系统 v2.4 — Agent 交接文档
 
 > **生成时间**: 2026-08-14
-> **版本**: v2.4.3
+> **版本**: v2.4.4
 > **项目路径**: `d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4`
 
 ---
@@ -16,26 +16,39 @@
 
 | 模式 | 协议 | 数据存储 | 跨浏览器共享 |
 |------|------|----------|-------------|
-| 服务器模式（推荐） | `http://localhost:8000` | data/*.json + localStorage + IndexedDB | ✅ 通过服务器API |
+| 服务器模式（推荐） | `http://localhost:8000` | SQLite + IndexedDB + localStorage | ✅ 通过 /db/* REST API |
 | 本地直接打开 | `file://` | localStorage + IndexedDB + data/*.js脚本注入 | ❌ 各浏览器独立 |
 
-### 2.2 数据持久化架构（双写双读）
+### 2.2 数据持久化架构（离线优先 + SQLite 持久化）
 
 ```
-写入流程: showLoadingIndicator → saveToLocalStorage()
-  → 同步: _saveToLocalStorage() 写入 localStorage（防刷新丢失）
-  → 异步: _saveToIndexedDB() 写入 IndexedDB
-  → 异步: _saveToServer() 写入 data/*.json（服务器模式）
+数据读取流程：
+  IndexedDB 缓存命中 → 直接返回（零延迟，离线可用）
+              ↓ 未命中
+  SQLite REST API (/db/*) → 同步到 IndexedDB + localStorage → 返回
+              ↓ API 不可用
+  localStorage 兜底
 
-读取流程: loadFromLocalStorage()
-  → 异步: storageManager.getItem()
-    → 优先: window.__LOCAL_DATA__（file://模式脚本注入）
-    → 其次: IndexedDB
-    → 最后: localStorage（同步兜底）
-  → 数据量大者胜出
+数据写入流程：
+  1. 同步写入 IndexedDB（离线立即可用）
+  2. 同步等待 SQLite REST API 持久化（确保持久化）
+  3. 同步写入 localStorage（防刷新丢失）
 ```
 
-### 2.3 关键约束（必须遵守）
+### 2.3 数据一致性检查机制
+
+```
+检查模式：
+  ├─ 标记模式（mark）：逐条对比字段级差异 → 存入 IndexedDB __conflict_* → 人工审查
+  └─ 自动模式（auto）：检测差异 → IndexedDB 为准直接覆盖 SQLite
+
+冲突解决策略：
+  ├─ 以本地为准（local）：IndexedDB 数据覆盖 SQLite
+  ├─ 以服务器为准（server）：SQLite 数据覆盖 IndexedDB
+  └─ 自定义合并（merged）：手动合并后写入双方
+```
+
+### 2.4 关键约束（必须遵守）
 
 1. **DOM查询必须限定活跃页面** — 使用 `getActivePage()` 限定 `querySelector` 作用域，否则多页面应用会选错元素
 2. **加载指示器统一接口** — 必须使用 `showLoadingIndicator()` / `hideLoadingIndicator()` 配对调用，通过CSS类 `visible` 控制，**禁止直接操作 `style.display`**
@@ -61,8 +74,12 @@
 ```
 index.html              — 主页面（含SVG图标定义、内联恢复脚本、预创建加载指示器）
 styles.css              — 全局样式（响应式布局、自定义滚动条、附件横向排版、CustomSelect删除按钮）
-simple_server.js        — Node.js HTTP服务器（端口8000，API: /api/save, /api/load, /api/check）
+simple_server.js        — Node.js HTTP服务器（端口8000，API: /api/save, /api/load, /api/check, /db/assets, /db/user-state, /db/options/*）
 final_chart_fix.js      — 图表渲染修复（200ms防抖，最后加载）
+manifest.json           — PWA应用清单（应用名称、图标、主题色）
+sw.js                   — Service Worker（静态资源缓存、离线访问）
+db/database.js          — SQLite数据库连接与CRUD操作（资产、选项、用户状态）
+db/migrate.js           — 数据迁移脚本（JSON → SQLite）
 ```
 
 ### 3.2 JS模块（js/目录，按index.html加载顺序）
@@ -70,7 +87,7 @@ final_chart_fix.js      — 图表渲染修复（200ms防抖，最后加载）
 | 文件 | 职责 | 关键函数 |
 |------|------|----------|
 | `config.js` | 全局变量、STORAGE_KEYS常量、Logger、getElement/getActivePage工具函数、统一防抖debounce、轻量状态管理State | `STORAGE_KEYS`, `currentView`, `assetsData`, `debounce()`, `State` |
-| `storage.js` | FileStorageManager类、数据加载/保存、文件监听轮询、跨浏览器同步 | `loadFromLocalStorage()`, `saveToLocalStorage()`, `_saveToLocalStorage()`, `_loadFromLocalStorage()` |
+| `storage.js` | FileStorageManager类、数据加载/保存、文件监听轮询、跨浏览器同步、SQLite REST API交互、数据一致性检查 | `loadFromLocalStorage()`, `saveToLocalStorage()`, `reconcileAll()`, `getConflicts()`, `resolveConflict()` |
 | `notifications.js` | 通知消息、加载指示器（visible类控制） | `showLoadingIndicator()`, `hideLoadingIndicator()` |
 | `navigation.js` | 页面切换、currentView保存/恢复、图片缩放重置 | `switchPage()`, `resetImageZoom()` |
 | `dashboard.js` | 控制面板渲染（统计卡片、最近资产、损坏设备） | `renderRecentAssets()`, `renderDamagedAssets()`, `updateStatistics()` |
@@ -120,7 +137,91 @@ final_chart_fix.js      — 图表渲染修复（200ms防抖，最后加载）
 
 ## 四、最近修改记录（本次会话）
 
-### 4.8 自动文件同步与手动连接体验优化（2026-08-14）
+### 4.11 数据一致性检查与冲突标记机制（2026-08-14）
+
+**目标**: 当后端服务中断后恢复，手动检查 IndexedDB 与 SQLite 之间的数据差异，支持冲突标记而非直接覆盖。
+
+**新增功能**:
+
+1. **`reconcileAll({ mode })`** — 手动触发一致性检查
+   - `mode: 'auto'`（自动同步，IndexedDB 为准）
+   - `mode: 'mark'`（标记冲突，不覆盖，人工审查）
+
+2. **`_detectAssetConflicts(idbAssets, dbAssets)`** — 逐条资产对比
+   - 字段级差异检测（owner/brandModel/type/user/department/status/purchaseDate/location/description）
+   - 附件和维护记录 JSON 差异检测
+   - 仅本地存在的资产（离线新增）和仅服务器存在的资产
+
+3. **`getConflicts()` / `resolveConflict(key, resolution)` / `resolveAllConflicts(resolution)`** — 冲突审查 API
+   - 解决方案：`'local'`（以本地为准）、`'server'`（以服务器为准）、`'merged'`（自定义合并）
+
+**修改文件**: `js/storage.js`, `js/events.js`, `index.html`
+
+- **[storage.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/storage.js)**：
+  - 新增 `_detectAssetConflicts()` — 逐条对比资产，返回字段级冲突详情、仅本地/仅服务器 ID 列表
+  - 新增 `_detectObjectConflict()` — 非数组数据的冲突检测
+  - 改造 `reconcileAll()` — 支持 `{ mode: 'mark' | 'auto' }` 参数；标记模式下冲突存入 IndexedDB `__conflict_${key}__`
+  - 新增 `getConflicts()` — 读取所有已标记冲突
+  - 新增 `resolveConflict(key, resolution)` — 解决单个冲突
+  - 新增 `resolveAllConflicts(resolution)` — 批量解决所有冲突
+
+- **[events.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/events.js)**：
+  - 一致性检查按钮增加模式选择读取
+  - 新增 `loadConflictReviewPanel()` — 加载冲突审查面板
+  - 新增批量解决按钮事件绑定（全部本地/全部服务器）
+  - 新增 `window.resolveConflictByKey()` — 单个冲突解决全局函数
+
+- **[index.html](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/index.html)**：
+  - 系统设置页新增一致性检查区域（模式选择单选按钮 + 检查按钮 + 结果表格）
+  - 新增冲突审查面板（冲突徽章、批量操作按钮、逐条冲突详情展示）
+
+**冲突记录存储格式**（IndexedDB `__conflict_${key}__`）：
+```javascript
+{
+  key: 'assetManagementData',
+  detectedAt: '2026-08-14T15:00:00.000Z',
+  conflicts: [{
+    type: 'asset_field_diff',
+    id: 'ZC-2025-001',
+    idbVersion: { /* 本地完整资产对象 */ },
+    dbVersion: { /* 服务器完整资产对象 */ },
+    diffFields: [{ field: 'owner', idbValue: 'A公司', dbValue: 'B公司' }]
+  }],
+  idbOnly: ['NEW-001'],    // 仅 IndexedDB 存在的资产 ID
+  dbOnly: ['REMOTE-001'],  // 仅 SQLite 存在的资产 ID
+  idbSnapshot: [ /* 本地完整数据快照 */ ],
+  dbSnapshot: [ /* 服务器完整数据快照 */ ]
+}
+```
+
+### 4.10 PWA + SQLite 离线优先架构（2026-08-14）
+
+**目标**: 实现阶段1 PWA 离线支持 + 阶段2 SQLite 数据持久化，结合 IndexedDB 作为离线缓存。
+
+**新增文件**:
+- `manifest.json` — PWA 应用清单
+- `sw.js` — Service Worker 静态资源缓存
+- `db/database.js` — SQLite 数据库连接与 CRUD
+- `db/migrate.js` — JSON → SQLite 数据迁移
+
+**修改文件**: `js/storage.js`, `simple_server.js`
+
+- **[storage.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/storage.js)**：
+  - 新增 `_DB_FIELD_MAP` — snake_case ↔ camelCase 字段映射
+  - 新增 `_DB_ENDPOINTS` — 数据键名与 API 端点映射
+  - 新增 `_isDbApiReady()` — 检测后端 API 可用性
+  - 新增 `_assetToDb()` / `_dbToAsset()` — 字段格式转换
+  - 新增 `_loadFromDb(key)` / `_saveToDb(key, data)` — SQLite REST API 交互
+  - 新增 `_needsBackgroundSync()` — 智能比较数据差异
+  - 改造 `getItem()` — IndexedDB 优先读取 + 后台同步 SQLite
+  - 改造 `setItem()` — 同步写 IndexedDB + 同步等待 SQLite + localStorage
+  - 改造 `removeItem()` — 删除时同步到 SQLite
+
+- **[simple_server.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/simple_server.js)**：
+  - 新增 REST API 端点：`GET/POST/DELETE /db/assets[/:id]`、`/db/user-state`、`/db/options/:category`
+  - 为 JS/CSS/HTML/JSON 文件添加 `Cache-Control: no-cache` 头
+
+### 4.9 自动文件同步与手动连接体验优化（2026-08-14）
 
 **问题**: 之前的自动连接方案（全局click监听器）导致：
 1. 打开页面时不弹出文件夹选择器，切换页面时才触发
@@ -357,6 +458,8 @@ modal.style.display = 'block';     // 2. 立即显示 modal → img 区域空白
 5. **附件base64** — 附件以base64编码存储，`url` 大字段在 localStorage 中被剥离（仅保留元数据），完整数据在 IndexedDB；`openFileViewer()` 按需从 IndexedDB 加载 `url`
 6. **Node.js依赖** — `package.json` 只有 `archiver`（用于打包），服务器本身是零依赖原生模块
 7. **服务器启动** — 端口8000，`node simple_server.js` 或 `python -m http.server 8000`
+8. **SQLite持久化** — SQLite 数据库文件位于 `db/asset_management.db`，首次启动自动创建；所有 CRUD 通过 `/db/*` REST API 访问
+9. **数据一致性检查** — 在系统设置页面点击"检查数据一致性"，标记模式下冲突记录存储在 IndexedDB `__conflict_*` 键中，需手动审查解决
 
 ### 5.3 代码风格约定
 

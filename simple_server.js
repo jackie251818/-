@@ -393,6 +393,25 @@ const server = http.createServer(async (req, res) => {
                 return send(200, { success: true, data: values });
             }
 
+            // POST /db/options/:category - 保存自定义选项（全量替换）
+            if (req.method === 'POST' && optionsMatch) {
+                const category = decodeURIComponent(optionsMatch[1]);
+                const body = await readBody(req);
+                const payload = JSON.parse(body);
+                const values = payload.values || [];
+                const deletedValues = payload.deletedValues || [];
+                db.setCustomOptions(category, values, deletedValues);
+                return send(200, { success: true });
+            }
+
+            // DELETE /db/options/:category - 删除所有自定义选项
+            if (req.method === 'DELETE' && optionsMatch) {
+                const category = decodeURIComponent(optionsMatch[1]);
+                const database = db.getDb();
+                database.prepare("DELETE FROM custom_options WHERE category = ?").run(category);
+                return send(200, { success: true });
+            }
+
             // GET /db/user-state - 获取用户状态
             if (req.method === 'GET' && pathname === '/db/user-state') {
                 const state = db.getUserState();
@@ -404,6 +423,20 @@ const server = http.createServer(async (req, res) => {
                 const body = await readBody(req);
                 const state = JSON.parse(body);
                 db.updateUserState(state);
+                return send(200, { success: true });
+            }
+
+            // DELETE /db/user-state - 重置用户状态
+            if (req.method === 'DELETE' && pathname === '/db/user-state') {
+                const database = db.getDb();
+                database.prepare("DELETE FROM user_state WHERE id = 1").run();
+                return send(200, { success: true });
+            }
+
+            // DELETE /db/assets - 清空所有资产
+            if (req.method === 'DELETE' && pathname === '/db/assets') {
+                const database = db.getDb();
+                database.prepare("DELETE FROM assets").run();
                 return send(200, { success: true });
             }
 
@@ -437,16 +470,20 @@ const server = http.createServer(async (req, res) => {
     fs.readFile(filePath, (error, content) => {
         if (error) {
             if (error.code === 'ENOENT') {
-                // 文件不存在
                 respond404(res);
             } else {
-                // 其他服务器错误
                 res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
                 res.end(`服务器错误: ${error.code}`);
             }
         } else {
-            // 文件读取成功
-            res.writeHead(200, { 'Content-Type': contentType });
+            // 文件读取成功 - JS/CSS/HTML 禁用缓存确保最新版本
+            const noCacheExts = ['.js', '.css', '.html', '.json'];
+            const headers = { 'Content-Type': contentType };
+            if (noCacheExts.includes(extname)) {
+                headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+                headers['Pragma'] = 'no-cache';
+            }
+            res.writeHead(200, headers);
             res.end(content, 'utf-8');
         }
     });

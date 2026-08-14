@@ -142,10 +142,10 @@ function queryAssets(options = {}) {
     const countRow = database.prepare(`SELECT COUNT(*) as total FROM assets ${whereClause}`).get(...params);
     const total = countRow.total;
 
-    // 分页查询（轻量字段，不包含 attachments 和 maintenance_records 的完整数据）
+    // 分页查询（包含所有字段，含 attachments 和 maintenance_records）
     const offset = (page - 1) * pageSize;
     const rows = database.prepare(
-        `SELECT id, owner, brand_model, type, user, department, status, purchase_date, location, description, created_at, updated_at FROM assets ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+        `SELECT * FROM assets ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`
     ).all(...params, pageSize, offset);
 
     return { data: rows, total };
@@ -264,14 +264,20 @@ function deleteAsset(id) {
 /**
  * 查询自定义选项
  * @param {string} category - owner/department/type
- * @param {boolean} includeDeleted
+ * @param {boolean} includeDeleted - 是否返回已删除选项（返回对象数组包含 is_deleted 字段）
  * @returns {array}
  */
 function getCustomOptions(category, includeDeleted = false) {
     const database = getDb();
-    const where = includeDeleted ? 'WHERE category = ?' : 'WHERE category = ? AND is_deleted = 0';
-    const rows = database.prepare(`SELECT value FROM custom_options ${where} ORDER BY value`).all(category);
-    return rows.map(r => r.value);
+    if (includeDeleted) {
+        // 返回所有选项（含已删除），格式为对象数组 [{ value, is_deleted }]
+        const rows = database.prepare(`SELECT value, is_deleted FROM custom_options WHERE category = ? ORDER BY value`).all(category);
+        return rows.map(r => ({ value: r.value, is_deleted: r.is_deleted }));
+    } else {
+        // 仅返回正常选项，格式为字符串数组
+        const rows = database.prepare(`SELECT value FROM custom_options WHERE category = ? AND is_deleted = 0 ORDER BY value`).all(category);
+        return rows.map(r => r.value);
+    }
 }
 
 /**

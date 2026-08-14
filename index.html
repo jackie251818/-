@@ -1326,6 +1326,38 @@
                             注：连接文件夹功能需要 Chrome 86+ 或 Edge 86+ 浏览器。不支持时请使用"下载数据文件"手动覆盖 data 目录下的原文件。
                         </p>
                     </div>
+
+                    <!-- 数据一致性检查 -->
+                    <div style="margin-top: 20px; padding: 15px; border-radius: 6px; background: #f0f7ff; border: 1px solid #bae0ff;">
+                        <h4 style="margin: 0 0 8px 0;"><i class="fas fa-clipboard-check"></i> 数据一致性检查</h4>
+                        <p style="margin: 0 0 12px 0; color: #666; font-size: 13px;">
+                            当后端服务曾中断后恢复，点击下方按钮检查 IndexedDB（本地缓存）与 SQLite（服务器数据库）之间的数据差异。
+                        </p>
+                        <div style="margin-bottom: 12px;">
+                            <label style="margin-right: 16px; cursor: pointer; font-size: 13px;">
+                                <input type="radio" name="reconcile-mode" value="mark" checked> 标记冲突（不覆盖，人工审查）
+                            </label>
+                            <label style="cursor: pointer; font-size: 13px;">
+                                <input type="radio" name="reconcile-mode" value="auto"> 自动同步（以本地为准直接覆盖）
+                            </label>
+                        </div>
+                        <button class="btn btn-primary" id="reconcile-db-btn">
+                            <i class="fas fa-sync-alt"></i> 检查数据一致性
+                        </button>
+                        <div id="reconcile-result" style="display:none; margin-top: 12px; padding: 10px; border-radius: 4px; font-size: 13px; max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+
+                    <!-- 冲突审查面板 -->
+                    <div id="conflict-review-panel" style="display:none; margin-top: 20px; padding: 15px; border-radius: 6px; background: #fff7e6; border: 1px solid #ffd591;">
+                        <h4 style="margin: 0 0 8px 0;"><i class="fas fa-exclamation-triangle"></i> 冲突审查 <span id="conflict-count-badge" style="background:#fa8c16; color:#fff; padding:2px 8px; border-radius:10px; font-size:12px;">0</span></h4>
+                        <p style="margin: 0 0 12px 0; color: #666; font-size: 13px;">以下数据项在本地和服务器之间存在差异，请选择解决方案。</p>
+                        <div style="margin-bottom: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button class="btn btn-sm btn-primary" id="resolve-all-local-btn"><i class="fas fa-laptop"></i> 全部以本地为准</button>
+                            <button class="btn btn-sm btn-primary" id="resolve-all-server-btn"><i class="fas fa-server"></i> 全部以服务器为准</button>
+                            <button class="btn btn-sm btn-secondary" id="refresh-conflicts-btn"><i class="fas fa-redo"></i> 刷新</button>
+                        </div>
+                        <div id="conflict-list" style="font-size: 13px;"></div>
+                    </div>
                 </div>
             </div>
         </div>

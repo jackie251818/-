@@ -6,7 +6,7 @@
  *   - API 请求: Network-first（在线优先，离线降级到缓存）
  */
 
-const CACHE_VERSION = 'v2.4-pwa-v1';
+const CACHE_VERSION = 'v2.4-pwa-v2';
 const STATIC_CACHE = `static-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `runtime-${CACHE_VERSION}`;
 

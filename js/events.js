@@ -224,6 +224,172 @@ function bindDataDependentEventListeners() {
             });
         }
 
+        // 数据一致性检查按钮
+        const reconcileBtn = document.getElementById('reconcile-db-btn');
+        if (reconcileBtn) {
+            reconcileBtn.addEventListener('click', async function() {
+                const resultDiv = document.getElementById('reconcile-result');
+                const originalText = reconcileBtn.innerHTML;
+
+                // 读取选中的模式
+                const modeRadio = document.querySelector('input[name="reconcile-mode"]:checked');
+                const mode = modeRadio ? modeRadio.value : 'mark';
+
+                reconcileBtn.disabled = true;
+                reconcileBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在检查...';
+                if (resultDiv) {
+                    resultDiv.style.display = 'block';
+                    resultDiv.style.background = '#fffbe6';
+                    resultDiv.style.border = '1px solid #ffe58f';
+                    resultDiv.innerHTML = '正在检查数据一致性，请稍候...';
+                }
+
+                try {
+                    const result = await storageManager.reconcileAll({ mode });
+
+                    if (resultDiv) {
+                        if (result.success) {
+                            resultDiv.style.background = mode === 'mark' && result.conflictCount > 0 ? '#fff7e6' : '#f6ffed';
+                            resultDiv.style.border = mode === 'mark' && result.conflictCount > 0 ? '1px solid #ffd591' : '1px solid #b7eb8f';
+                            let html = `<strong>${result.message}</strong><br><br>`;
+                            html += '<table style="width:100%; border-collapse: collapse;">';
+                            html += '<tr style="border-bottom: 1px solid #ddd;"><th style="text-align:left; padding:4px;">数据项</th><th style="text-align:left; padding:4px;">状态</th><th style="text-align:left; padding:4px;">详情</th></tr>';
+                            for (const r of result.results) {
+                                const statusColor = r.status === 'fixed' ? '#52c41a' : r.status === 'in_sync' ? '#999' : r.status === 'error' ? '#ff4d4f' : r.status === 'conflict' ? '#fa8c16' : '#999';
+                                const statusText = r.status === 'fixed' ? '已修复' : r.status === 'in_sync' ? '一致' : r.status === 'error' ? '错误' : r.status === 'conflict' ? '冲突' : '跳过';
+                                html += `<tr style="border-bottom: 1px solid #eee;">`;
+                                html += `<td style="padding:4px;">${r.key}</td>`;
+                                html += `<td style="padding:4px; color:${statusColor};">${statusText}</td>`;
+                                html += `<td style="padding:4px; color:#666;">${r.detail}</td>`;
+                                html += `</tr>`;
+                            }
+                            html += '</table>';
+                            resultDiv.innerHTML = html;
+
+                            // 标记模式下，如果有冲突则显示冲突审查面板
+                            if (mode === 'mark' && result.conflictCount > 0) {
+                                await loadConflictReviewPanel();
+                            } else {
+                                const reviewPanel = document.getElementById('conflict-review-panel');
+                                if (reviewPanel) reviewPanel.style.display = 'none';
+                            }
+                        } else {
+                            resultDiv.style.background = '#fff2f0';
+                            resultDiv.style.border = '1px solid #ffccc7';
+                            resultDiv.innerHTML = `<strong style="color:#ff4d4f;">${result.message}</strong>`;
+                        }
+                    }
+                } catch (e) {
+                    if (resultDiv) {
+                        resultDiv.style.background = '#fff2f0';
+                        resultDiv.style.border = '1px solid #ffccc7';
+                        resultDiv.innerHTML = `<strong style="color:#ff4d4f;">一致性检查失败: ${e.message}</strong>`;
+                    }
+                } finally {
+                    reconcileBtn.disabled = false;
+                    reconcileBtn.innerHTML = originalText;
+                }
+            });
+        }
+
+        // 冲突审查：加载冲突列表
+        async function loadConflictReviewPanel() {
+            const reviewPanel = document.getElementById('conflict-review-panel');
+            const conflictList = document.getElementById('conflict-list');
+            const countBadge = document.getElementById('conflict-count-badge');
+            if (!reviewPanel || !conflictList) return;
+
+            const conflicts = await storageManager.getConflicts();
+            if (conflicts.length === 0) {
+                reviewPanel.style.display = 'none';
+                return;
+            }
+
+            reviewPanel.style.display = 'block';
+            if (countBadge) countBadge.textContent = conflicts.length;
+
+            let html = '';
+            for (const c of conflicts) {
+                html += `<div style="border: 1px solid #ffd591; border-radius: 4px; padding: 10px; margin-bottom: 8px; background: #fff;">`;
+                html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">`;
+                html += `<strong>${c.key}</strong>`;
+                html += `<span style="color:#999; font-size:12px;">检测时间: ${c.detectedAt}</span>`;
+                html += `</div>`;
+
+                // 资产冲突：显示逐条差异
+                if (c.conflicts && c.conflicts.length > 0) {
+                    html += '<div style="margin-bottom: 6px;"><u>字段冲突</u>:</div>';
+                    for (const cf of c.conflicts) {
+                        html += `<div style="padding: 4px 8px; margin-bottom: 4px; background: #fff7e6; border-radius: 3px;">`;
+                        html += `<strong>${cf.id}</strong>`;
+                        for (const df of cf.diffFields) {
+                            html += `<div style="font-size:12px; color:#666; margin-left:12px;">`;
+                            html += `<span style="color:#fa541c;">本地:</span> ${String(df.idbValue ?? '').substring(0, 50)} `;
+                            html += `<span style="color:#1890ff;">服务器:</span> ${String(df.dbValue ?? '').substring(0, 50)} `;
+                            html += `<span style="color:#999;">(${df.field})</span>`;
+                            html += `</div>`;
+                        }
+                        html += `</div>`;
+                    }
+                }
+                if (c.idbOnly && c.idbOnly.length > 0) {
+                    html += `<div style="margin-bottom: 4px; color: #fa541c;">仅本地存在: ${c.idbOnly.join(', ')}</div>`;
+                }
+                if (c.dbOnly && c.dbOnly.length > 0) {
+                    html += `<div style="margin-bottom: 4px; color: #1890ff;">仅服务器存在: ${c.dbOnly.join(', ')}</div>`;
+                }
+                if (!c.conflicts && c.idbSnapshot !== undefined) {
+                    html += `<div style="font-size:12px; color:#666;">双方数据存在差异（非数组数据）</div>`;
+                }
+
+                html += `<div style="margin-top: 8px;">`;
+                html += `<button class="btn btn-sm btn-primary" onclick="resolveConflictByKey('${c.key}', 'local')" style="margin-right: 6px;"><i class="fas fa-laptop"></i> 以本地为准</button>`;
+                html += `<button class="btn btn-sm btn-primary" onclick="resolveConflictByKey('${c.key}', 'server')" style="margin-right: 6px;"><i class="fas fa-server"></i> 以服务器为准</button>`;
+                html += `</div>`;
+                html += `</div>`;
+            }
+            conflictList.innerHTML = html;
+        }
+
+        // 全部以本地为准
+        const resolveAllLocalBtn = document.getElementById('resolve-all-local-btn');
+        if (resolveAllLocalBtn) {
+            resolveAllLocalBtn.addEventListener('click', async function() {
+                if (!confirm('确定将所有冲突数据以本地（IndexedDB）为准解决？这将覆盖服务器数据。')) return;
+                resolveAllLocalBtn.disabled = true;
+                const result = await storageManager.resolveAllConflicts('local');
+                alert(result.message);
+                resolveAllLocalBtn.disabled = false;
+                await loadConflictReviewPanel();
+            });
+        }
+
+        // 全部以服务器为准
+        const resolveAllServerBtn = document.getElementById('resolve-all-server-btn');
+        if (resolveAllServerBtn) {
+            resolveAllServerBtn.addEventListener('click', async function() {
+                if (!confirm('确定将所有冲突数据以服务器（SQLite）为准解决？这将覆盖本地数据。')) return;
+                resolveAllServerBtn.disabled = true;
+                const result = await storageManager.resolveAllConflicts('server');
+                alert(result.message);
+                resolveAllServerBtn.disabled = false;
+                await loadConflictReviewPanel();
+            });
+        }
+
+        // 刷新冲突列表
+        const refreshConflictsBtn = document.getElementById('refresh-conflicts-btn');
+        if (refreshConflictsBtn) {
+            refreshConflictsBtn.addEventListener('click', loadConflictReviewPanel);
+        }
+
+        // 单个冲突解决（全局函数，供 inline onclick 调用）
+        window.resolveConflictByKey = async function(key, resolution) {
+            const result = await storageManager.resolveConflict(key, resolution);
+            alert(result.message);
+            await loadConflictReviewPanel();
+        };
+
         // 初始化文件同步状态显示
         updateFileSyncStatus();
 
