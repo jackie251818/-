@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#16213e"/>
+  <g transform="translate(96, 96) scale(13.33)">
+    <path fill="#4fc3f7" d="M20 3H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 12H7v-2h10v2zm0-3H7V8h10v4z"/>
+  </g>
+  <text x="256" y="460" font-family="Microsoft YaHei, sans-serif" font-size="48" font-weight="bold" fill="#4fc3f7" text-anchor="middle">资产管理系统</text>
+</svg>

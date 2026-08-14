@@ -3,6 +3,16 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+// SQLite 数据库模块（阶段2：数据持久化）
+let db = null;
+try {
+    db = require('./db/database');
+    db.initSchema();
+    console.log('[Server] SQLite 数据库就绪');
+} catch (e) {
+    console.warn('[Server] SQLite 模块加载失败，API降级为文件模式:', e.message);
+}
+
 // ============ 端口与路径解析（兼容 Electron 打包环境）============
 
 // 端口优先级：环境变量 SERVER_PORT > 默认 8000
@@ -189,7 +199,17 @@ function getLocalIP() {
     return 'localhost';
 }
 
-const server = http.createServer((req, res) => {
+// 读取请求 body（Promise 封装，供 async 路由使用）
+function readBody(req) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => resolve(body));
+        req.on('error', reject);
+    });
+}
+
+const server = http.createServer(async (req, res) => {
     // 解析请求 URL
     const parsedUrl = new URL(req.url, 'http://localhost');
     const pathname = parsedUrl.pathname;
@@ -310,6 +330,94 @@ const server = http.createServer((req, res) => {
         res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ success: false, error: '未知的 API 端点' }));
         return;
+    }
+
+    // ============ SQLite REST API（阶段2：数据持久化）============
+    if (db && pathname.startsWith('/db/')) {
+        const send = (code, data) => {
+            res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify(data));
+        };
+
+        try {
+            // GET /db/assets - 查询资产列表（支持分页/搜索/筛选）
+            if (req.method === 'GET' && pathname === '/db/assets') {
+                const result = db.queryAssets({
+                    page: parseInt(parsedUrl.searchParams.get('page')) || 1,
+                    pageSize: parseInt(parsedUrl.searchParams.get('pageSize')) || 20,
+                    keyword: parsedUrl.searchParams.get('keyword') || '',
+                    status: parsedUrl.searchParams.get('status') || 'all',
+                    owner: parsedUrl.searchParams.get('owner') || 'all',
+                    type: parsedUrl.searchParams.get('type') || 'all',
+                    department: parsedUrl.searchParams.get('department') || 'all'
+                });
+                return send(200, { success: true, ...result });
+            }
+
+            // GET /db/assets/:id - 查询单个资产详情
+            const assetMatch = pathname.match(/^\/db\/assets\/(.+)$/);
+            if (req.method === 'GET' && assetMatch) {
+                const asset = db.getAssetById(decodeURIComponent(assetMatch[1]));
+                if (!asset) return send(404, { success: false, error: '资产不存在' });
+                return send(200, { success: true, data: asset });
+            }
+
+            // POST /db/assets - 新增资产
+            if (req.method === 'POST' && pathname === '/db/assets') {
+                const body = await readBody(req);
+                const asset = JSON.parse(body);
+                const result = db.insertAsset(asset);
+                return send(201, { success: true, data: result });
+            }
+
+            // PUT /db/assets/:id - 更新资产
+            if (req.method === 'PUT' && assetMatch) {
+                const body = await readBody(req);
+                const asset = JSON.parse(body);
+                const result = db.updateAsset(decodeURIComponent(assetMatch[1]), asset);
+                return send(200, { success: true, data: result });
+            }
+
+            // DELETE /db/assets/:id - 删除资产
+            if (req.method === 'DELETE' && assetMatch) {
+                const result = db.deleteAsset(decodeURIComponent(assetMatch[1]));
+                return send(200, { success: true, data: result });
+            }
+
+            // GET /db/options/:category - 获取自定义选项
+            const optionsMatch = pathname.match(/^\/db\/options\/(.+)$/);
+            if (req.method === 'GET' && optionsMatch) {
+                const category = decodeURIComponent(optionsMatch[1]);
+                const includeDeleted = parsedUrl.searchParams.get('includeDeleted') === 'true';
+                const values = db.getCustomOptions(category, includeDeleted);
+                return send(200, { success: true, data: values });
+            }
+
+            // GET /db/user-state - 获取用户状态
+            if (req.method === 'GET' && pathname === '/db/user-state') {
+                const state = db.getUserState();
+                return send(200, { success: true, data: state });
+            }
+
+            // PUT /db/user-state - 更新用户状态
+            if (req.method === 'PUT' && pathname === '/db/user-state') {
+                const body = await readBody(req);
+                const state = JSON.parse(body);
+                db.updateUserState(state);
+                return send(200, { success: true });
+            }
+
+            // GET /db/stats - 数据库统计信息
+            if (req.method === 'GET' && pathname === '/db/stats') {
+                const assets = db.queryAssets({ page: 1, pageSize: 1 });
+                return send(200, { success: true, data: { totalAssets: assets.total, dbPath: db.DB_PATH } });
+            }
+
+            return send(404, { success: false, error: '未知的数据库API端点' });
+        } catch (e) {
+            console.error('[DB API] 错误:', e.message);
+            return send(500, { success: false, error: e.message });
+        }
     }
 
     // ============ 静态文件处理 ============

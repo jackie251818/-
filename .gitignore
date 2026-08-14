@@ -6,6 +6,12 @@ data/*.json
 data/*.js
 !data/.gitkeep
 
+# SQLite 数据库文件（运行时生成）
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
+
 # 系统文件
 Thumbs.db
 .DS_Store

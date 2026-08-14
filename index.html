@@ -3,6 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#16213e">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+    <link rel="apple-touch-icon" href="icons/icon.svg">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>电脑资产管理系统</title>
     <script>
         // 本地直接打开模式（file:// 协议）
@@ -1372,6 +1378,20 @@
     <script src="js/events.js" defer></script>
     <script src="js/init.js" defer></script>
     <script src="final_chart_fix.js"></script>
+    <!-- Service Worker 注册（PWA 离线支持） -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('./sw.js', { scope: './' })
+                    .then(function(registration) {
+                        console.log('[PWA] Service Worker 注册成功:', registration.scope);
+                    })
+                    .catch(function(error) {
+                        console.warn('[PWA] Service Worker 注册失败:', error.message);
+                    });
+            });
+        }
+    </script>
 </body>
 </html>
     
