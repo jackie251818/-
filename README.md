@@ -277,11 +277,164 @@ node -e "const a=require('archiver');const fs=require('fs');const o=fs.createWri
 
 ## 版本历史
 
-- **v2.4.4** (2026-08-14) — SQLite 持久化 + 离线优先架构 + 数据一致性检查与冲突标记机制
-- **v2.4.3** (2026-08-14) — 全项目性能优化 + 运行时 Bug 修复
-- **v2.4.2** (2026-08-14) — 自动文件同步与手动连接体验优化
-- **v2.4.1** (2026-08-14) — 模态框闪烁修复 + 编辑模式视觉优化
-- **v2.4** — 初始版本
+### v2.4.4 (2026-08-14) — 数据一致性检查 + 离线优先架构
+
+#### 数据一致性检查与冲突标记机制
+
+新增手动触发 IndexedDB 与 SQLite 差异检测，支持冲突标记而非直接覆盖：
+
+- **`reconcileAll({ mode })`** — 手动触发一致性检查
+  - `mode: 'auto'`（自动同步，IndexedDB 为准）
+  - `mode: 'mark'`（标记冲突，不覆盖，人工审查）
+- **`_detectAssetConflicts(idbAssets, dbAssets)`** — 逐条资产对比
+  - 字段级差异检测（owner/brandModel/type/user/department/status/purchaseDate/location/description）
+  - 附件和维护记录 JSON 差异检测
+  - 仅本地存在的资产（离线新增）和仅服务器存在的资产
+- **`getConflicts()` / `resolveConflict(key, resolution)` / `resolveAllConflicts(resolution)`** — 冲突审查 API
+  - 解决方案：`'local'`（以本地为准）、`'server'`（以服务器为准）、`'merged'`（自定义合并）
+- **修改文件**：`js/storage.js`、`js/events.js`、`index.html`
+  - 系统设置页新增一致性检查区域（模式选择 + 检查按钮 + 结果表格）
+  - 新增冲突审查面板（冲突徽章、批量操作按钮、逐条冲突详情展示）
+
+冲突记录存储在 IndexedDB `__conflict_${key}__` 键中，包含字段级 diff 详情、idbOnly/dbOnly 资产 ID 列表、双方完整快照。
+
+#### PWA + SQLite 离线优先架构
+
+- **新增文件**：
+  - `manifest.json` — PWA 应用清单
+  - `sw.js` — Service Worker 静态资源缓存
+  - `db/database.js` — SQLite 数据库连接与 CRUD
+  - `db/migrate.js` — JSON → SQLite 数据迁移
+- **修改 `js/storage.js`**：
+  - 新增 `_DB_FIELD_MAP`（snake_case ↔ camelCase 字段映射）、`_DB_ENDPOINTS`（数据键名 ↔ API 端点映射）
+  - 新增 `_isDbApiReady()`、`_assetToDb()` / `_dbToAsset()`、`_loadFromDb()` / `_saveToDb()`、`_needsBackgroundSync()`
+  - 改造 `getItem()` — IndexedDB 优先 + 后台同步 SQLite
+  - 改造 `setItem()` — 同步写 IndexedDB + 同步等待 SQLite + localStorage
+  - 改造 `removeItem()` — 删除时同步到 SQLite
+- **修改 `simple_server.js`**：新增 REST API 端点 `/db/assets[/:id]`、`/db/user-state`、`/db/options/:category`；JS/CSS/HTML/JSON 文件添加 `Cache-Control: no-cache` 头
+
+### v2.4.3 (2026-08-14) — 全项目性能优化 + 运行时 Bug 修复
+
+#### 资产表格不渲染 Bug 修复 + 空引用防护
+
+- **根因**：`renderAllAssets()` 中数据行追加逻辑被包裹在 `requestAnimationFrame()` 回调中，当资产页面非 active 时浏览器会延迟/节流 RAF 回调，导致行不渲染（但 `renderPagination()` 同步执行，total-records 正常更新）
+- **修复**：`js/assets.js` L28-39 — 移除 `requestAnimationFrame` 包装，改为在 `setTimeout` 回调内同步使用 `DocumentFragment` 追加行
+- **空引用防护修复**：
+  - `js/init.js` L185/L192 — `checkUsage()` 添加 `await` + try-catch；`backup-data` 按钮判空
+  - `js/print.js` L8/L15、`js/maintenance.js` L7/L42、`js/asset-edit.js` L550/L728 — `getElement('asset-id').textContent` 提取变量 + 三元判空
+- **验证**：强制刷新后表格正确渲染资产记录，无控制台 error
+
+#### 全项目性能优化
+
+| 优化项 | 文件 | 改善点 |
+|--------|------|--------|
+| 统一防抖 | `js/config.js` | 新增 `debounce(key, fn, delay)`，消除各模块重复定时器 |
+| 状态管理 | `js/config.js` | 新增轻量 `State` 对象（订阅-通知模式，避免各模块轮询） |
+| 文件监听间隔 | `js/storage.js` | 5 秒轮询降低 CPU 占用 |
+| 附件分离存储 | `js/storage.js` | `_saveToLocalStorage` 剥离附件 `url`（大 base64），仅保留元数据，解决 5MB 限额 |
+| QuotaExceeded 降级 | `js/storage.js` | 空间不足时自动移除 `url/thumbnail/data` 后重试 |
+| 按需加载附件 | `js/assets.js` | `openFileViewer()` 按需从 IndexedDB 加载 `url` |
+| DOM 重绘优化 | `js/assets.js` | 50ms 防抖 + `requestAnimationFrame` + `DocumentFragment` |
+| 搜索/筛选防抖 | `js/events.js` | dashboard-search 200ms、assets-search 200ms、filter 100ms |
+| 事件委托统一 | `js/events.js` | 动态元素事件委托，避免事件丢失 |
+| 错误边界 | `js/search-filter.js` | `applyFilters()` try-catch，单点异常不瘫痪整体 |
+| 图表实例销毁 | `js/charts.js` | 4 个图表渲染前 `instance.destroy()`，防止内存泄漏 |
+
+### v2.4.2 (2026-08-14) — 自动文件同步与手动连接体验优化
+
+#### 修复问题
+
+1. 打开页面时不弹出文件夹选择器，切换页面时才触发
+2. 每次点击"允许"后误报"检测到数据变化"（文件写入后被文件监听误判为外部修改）
+3. 需每次手动选择 data 文件夹，无法自动恢复
+4. 删除已保存附件后无法保存
+
+#### 修复文件
+
+- **`js/storage.js`**：
+  - 删除废弃的 `_registerEarlyAutoConnectListener()`（~100 行，全局 click 监听器方案）
+  - 删除废弃的 `_clearBrowserCache()`（~45 行，浏览器重启清理方案）
+  - 删除废弃变量：`_autoConnectPending`、`_autoConnectClickListenerBound`、`_debugTrace`
+  - `_saveToScriptFile()` 写入成功后立即更新 `_fileLastModified[key]`，防止文件监听轮询误报
+  - `_restoreFileSystemAccess()` 只调用 `queryPermission`（无需用户手势），权限已授予时静默恢复
+  - 新增 `_suppressWatchNotification` 机制：内部写入文件期间阻止 `onFileChange` 通知
+- **`js/events.js`**：`initFileSyncBanner()` 浏览器支持且未连接时显示横幅；`onFileChange` 入口增加 `_suppressWatchNotification` 检查
+- **`js/asset-edit.js`**：
+  - `renderEditModeAttachments()` 删除循环末尾重复 click 事件绑定
+  - 删除死代码 `setupEditModeAttachmentViewer()`
+  - `saveEditedAsset()` 改用 `document.getElementById` 查找新文件预览
+  - `finalizeSave()` 通过 `dataset.index` 读取剩余未删除附件，确保删除的附件不被加回
+  - 无新文件时补充 `finalizeSave([])` 调用
+- **`js/config.js`**：`getElement()` 增加 `isConnected` 检测，自动重新查询 stale 引用
+- **`js/search-filter.js`**：`searchAssets()` 所有字段空值保护；扩展搜索范围至 type、description、location
+
+#### 连接流程
+
+| 场景 | 行为 |
+|------|------|
+| 首次使用 | 顶部横幅提示 → 用户点击"连接数据文件夹" → 选择文件夹 → 句柄保存到 IndexedDB |
+| 再次打开 | 自动读取已保存句柄 → queryPermission 检查 → 权限已授予则静默恢复 |
+| 权限失效 | 显示横幅 → 用户点击"连接" → 重新授权 |
+
+### v2.4.1 (2026-08-14) — 模态框闪烁修复 + 编辑模式视觉优化
+
+#### 文件查看器模态框闪烁修复
+
+- **根因**：`openFileViewer` 原逻辑先设置 `imageElement.src` 再显示 modal，导致 modal 显示后图片区域先空白再突然显示
+- **修复 `js/assets.js` L422-458**：用临时 `new Image()` 预加载，加载完成后再赋值给 `imageElement.src`，**图片就绪后才显示 modal**
+- **统一 modal 控制**：显示用 `classList.add('active')`，隐藏用 `classList.remove('active')` + 清除 inline `style.display`，ESC 关闭检查 `.classList.contains('active')`
+- **修改 `js/events.js`**：`closeFileViewer`（L426-440）、ESC 关闭判断（L462-465）
+
+#### 编辑模式"两个页面同时显示"视觉混乱修复
+
+- **根因**：`toggleEditMode` 只隐藏 `.asset-details` 和 `#attachments-container`，未隐藏 `#maintenance-records-table` 及其 `.card-header`
+- **修复 `js/asset-edit.js`** — 在 3 处函数同步维护记录的显示/隐藏：
+  - `toggleEditMode` (L78-83)：进入编辑时隐藏
+  - `cancelEditMode` (L144-149)：取消编辑时恢复
+  - `cleanupEditUI` (L648-653)：保存完成后恢复
+- 同时清理 `createEditForm` 中调试遗留的红色边框、硬编码 `backgroundColor`、`zIndex:9999`
+
+#### 页面刷新闪烁修复
+
+- **根因**：`init.js` 在 `DOMContentLoaded` 中过早移除 `<head>` 内联恢复样式 `_restore_view_style`；`loadFromLocalStorage` 异步回调中再次切换 active 类
+- **修复 `js/init.js`**：不再在 `DOMContentLoaded` 中移除临时样式，改为在 `loadFromLocalStorage` 回调完成后移除；移除回调中的二次 active 类切换逻辑
+
+#### 加载指示器卡死修复
+
+- **根因**：`initTemplateLoading()` 用 `loader.style.display = 'block'` 设置内联样式，但 `hideLoadingIndicator()` 只移除 `visible` CSS 类，内联样式优先级更高导致无法隐藏
+- **修复 `js/init.js`、`js/notifications.js`**：`initTemplateLoading()` 改用 `showLoadingIndicator()`；`hideLoadingIndicator()` 增加 `loader.style.display = ''` 双保险
+
+#### 导入/导出按钮迁移至系统设置页面
+
+- 数据管理按钮（导入 Excel/JSON、导出 Excel/JSON、下载模板）从页面顶部移到 `settings-page` 的"数据管理"卡片内
+- 修改 `index.html`、`styles.css`（`.data-management` 调整为 `justify-content: flex-start`、`flex-wrap: wrap`）
+- 按钮 `id` 保持不变，`events.js` 无需修改
+
+### v2.4.0 — 初始版本
+
+- 资产 CRUD、Excel/JSON 导入导出、统计图表、二维码标签打印
+- 附件管理（图片 / PDF 缩略图）
+- 维护记录管理
+- 自定义下拉选项添加 / 删除 / 持久化 / 跨浏览器同步
+- 多页面 DOM 查询作用域管理
+- 二维码中文编码修复
+
+### 项目代码清理（贯穿各版本）
+
+**已删除文件**：
+- `script.js` — 旧版单体脚本（已拆分到 `js/` 目录）
+- `debug_form.html` — 调试表单页面
+- `test_qr.html` — 二维码测试页面
+- `simple_server.py` — Python 服务器脚本（bat 文件直接使用 `python -m http.server`）
+
+**已清理调试代码**：
+- `asset-edit.js`：删除 10 处 `console.log`、调试用视觉指示器（绿色浮动 div）、重复 console.error
+- `events.js`：删除文件监听 console.log、废弃的 `bindEventListeners()` 兼容函数
+- `import-export.js`：删除 4 处 console.log
+- `index.html`：删除 `onload` 内联调试日志、清理过期注释
+- `final_chart_fix.js`：简化 console.warn 消息
+
+**保留的日志**：`console.error`、`console.warn`、`Logger.info/warn`、`simple_server.js` 中的 `console.log`
 
 详细变更记录见 [HANDOFF.md](HANDOFF.md)。
 
