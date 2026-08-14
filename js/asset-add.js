@@ -118,7 +118,7 @@ function handleFileUpload(e) {
                         if (processingCount === 0) {
                             showNotification('文件上传准备完成');
                         }
-                    });
+                    }, file.name);
                 };
                 pdfReader.readAsDataURL(file);
             } else if (file.type.startsWith('image/')) {
@@ -267,11 +267,13 @@ function ensurePdfJs() {
 }
 
 // 创建PDF缩略图
-async function createPdfThumbnail(dataUrl, maxWidth, maxHeight, callback) {
+async function createPdfThumbnail(dataUrl, maxWidth, maxHeight, callback, fileName) {
     if (!dataUrl || typeof callback !== 'function') {
         if (callback) callback(null);
         return;
     }
+    // 兼容老调用方：第5个参数可能是 callback,fileName 顺序错位的情况
+    if (typeof fileName !== 'string') fileName = '';
     try {
         const pdfjsLib = await ensurePdfJs();
         const loadingTask = pdfjsLib.getDocument({ data: atob(dataUrl.split(',')[1]) });
@@ -295,7 +297,21 @@ async function createPdfThumbnail(dataUrl, maxWidth, maxHeight, callback) {
         const thumbnailDataUrl = canvas.toDataURL('image/jpeg', 0.8);
         callback(thumbnailDataUrl);
     } catch (err) {
-        console.error('PDF缩略图生成失败:', err);
+        const label = fileName ? `（${fileName}）` : '';
+        console.error('PDF缩略图生成失败' + label + ':', err);
+        // 区分错误类型给出更友好的提示
+        const errMsg = (err && err.message) ? err.message : '未知错误';
+        let tip;
+        if (/password|encrypt/i.test(errMsg)) {
+            tip = `PDF${label}为加密文件，无法生成缩略图，已使用文件图标占位。`;
+        } else if (/load|fetch|network/i.test(errMsg)) {
+            tip = `PDF.js 库加载失败，无法生成缩略图${label}。请检查 libs/pdf.min.js 与 libs/pdf.worker.min.js 是否存在。`;
+        } else {
+            tip = `PDF缩略图生成失败${label}：${errMsg}。已使用文件图标占位，不影响附件保存。`;
+        }
+        if (typeof showNotification === 'function') {
+            showNotification(tip, 'warning', 5000);
+        }
         callback(null);
     }
 }
@@ -365,7 +381,7 @@ function handleAddAsset(e) {
                                 fileData.thumbnail = thumbnailDataUrl;
                             }
                             resolve(fileData);
-                        });
+                        }, file.name);
                     } else {
                         resolve(fileData);
                     }

@@ -1,396 +1,485 @@
-# 电脑固定资产管理系统 v2.4 — Agent 交接文档
+# HANDOFF 交接文档
 
-> **生成时间**: 2026-08-14
-> **版本**: v2.4.3
-> **项目路径**: `d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4`
+> 本文档面向接手继续开发/维护的工程师或 AI Agent。
+> 最后更新：2026-08-14
+> 当前版本：v2.4.4
+> 上一份交付物：`dist/固定资产管理系统-便携版-2.4.0.exe`（61.4 MB，烟雾测试通过）
 
 ---
 
-## 一、项目概述
+## 0. 快速上手 Checklist（5 分钟读完）
 
-纯前端+轻量Node.js服务器的电脑固定资产管理系统，支持离线使用。核心功能：资产CRUD、Excel/JSON导入导出、统计图表、二维码标签打印、附件管理（含PDF缩略图）、自定义下拉选项、多浏览器数据同步。
+接手后请按顺序做以下事情：
 
-## 二、技术架构
+1. **环境准备**
+   ```bash
+   npm install
+   npm start                 # 开发模式启动，验证基线可运行
+   ```
+2. **阅读本文档第 1~3 节**：理解项目定位、目录结构、运行模式
+3. **阅读第 4 节**：理解三重冗余存储架构（这是最容易出 bug 的地方）
+4. **阅读第 6 节「硬约束」**：修改代码前必须遵守的规则
+5. **阅读第 8 节「已知问题与陷阱」**：避免重蹈覆辙
+6. **如需重新构建**：参见第 7 节
+7. **修改 JS 后**：Electron 下 `Ctrl+R`；浏览器调试 `Ctrl+F5` 或 `http://localhost:8000/?t=<时间戳>`
+8. **提交前**：运行 `node --check <修改的文件>` 确认语法无误
 
-### 2.1 运行模式
+---
 
-| 模式 | 协议 | 数据存储 | 跨浏览器共享 |
-|------|------|----------|-------------|
-| 服务器模式（推荐） | `http://localhost:8000` | data/*.json + localStorage + IndexedDB | ✅ 通过服务器API |
-| 本地直接打开 | `file://` | localStorage + IndexedDB + data/*.js脚本注入 | ❌ 各浏览器独立 |
+## 1. 项目定位
 
-### 2.2 数据持久化架构（双写双读）
+**固定资产管理系统** 是一个基于 Electron 的离线桌面应用，主要特点：
 
-```
-写入流程: showLoadingIndicator → saveToLocalStorage()
-  → 同步: _saveToLocalStorage() 写入 localStorage（防刷新丢失）
-  → 异步: _saveToIndexedDB() 写入 IndexedDB
-  → 异步: _saveToServer() 写入 data/*.json（服务器模式）
+- **便携式优先**：单文件 `.exe`，双击即用，无需安装
+- **完全离线**：所有第三方库本地化（`libs/` 目录），不依赖任何 CDN
+- **数据跟 exe 走**：便携模式下数据存在 exe 同级 `data/` 目录，方便迁移
+- **多浏览器兼容**：浏览器调试模式下数据可跨浏览器共享（通过 `data/*.js` 文件）
+- **无后端依赖**：HTTP 服务器内嵌于 Electron 主进程，零外部依赖
 
-读取流程: loadFromLocalStorage()
-  → 异步: storageManager.getItem()
-    → 优先: window.__LOCAL_DATA__（file://模式脚本注入）
-    → 其次: IndexedDB
-    → 最后: localStorage（同步兜底）
-  → 数据量大者胜出
-```
+---
 
-### 2.3 关键约束（必须遵守）
-
-1. **DOM查询必须限定活跃页面** — 使用 `getActivePage()` 限定 `querySelector` 作用域，否则多页面应用会选错元素
-2. **加载指示器统一接口** — 必须使用 `showLoadingIndicator()` / `hideLoadingIndicator()` 配对调用，通过CSS类 `visible` 控制，**禁止直接操作 `style.display`**
-3. **saveToLocalStorage同步优先** — 先同步写localStorage，再异步写IndexedDB，否则刷新会丢数据
-4. **beforeunload同步保存** — 必须用同步 `_saveToLocalStorage()`，不能用Promise
-5. **路径安全** — `simple_server.js` 必须验证所有文件路径，防止目录遍历
-6. **附件加载失败** — 降级为非阻塞提示，不能用 `alert()` 阻塞页面
-7. **页面刷新状态恢复** — `currentView` 必须保存到localStorage，刷新后通过 `<head>` 内联脚本恢复
-8. **模态框显示统一用CSS类** — `.modal` 通过 `.active` 类控制显示（`.modal {display:none}` / `.modal.active {display:flex}`），禁止用 inline `style.display = 'block'` 覆盖，避免 hide 时失效
-9. **编辑模式隐藏完整详情内容** — `toggleEditMode` / `cancelEditMode` / `cleanupEditUI` 三处必须同步维护 `.asset-details` + `#attachments-container` + `#maintenance-records-table` + 维护记录表头的显示/隐藏，缺一不可
-10. **图片查看器先加载再显示** — `openFileViewer` 必须预加载图片到 `new Image()`，等图片 ready 后再赋值给 `modal-image` 的 src 并启用 `.active` 类，防止 modal 打开后图片区域空白跳跃
-11. **文件同步自动恢复** — `_restoreFileSystemAccess()` 通过 `queryPermission`（无需用户手势）静默恢复已保存的文件夹句柄；`_saveToScriptFile()` 写入后立即更新 `_fileLastModified` 防止文件监听误报
-12. **getElement stale引用保护** — `getElement(id)` 缓存的DOM元素若已从文档移除（`isConnected === false`），必须自动重新查询
-13. **搜索安全访问** — `searchAssets()` 中所有字段访问必须用 `(field || '').toLowerCase()` 做空值保护，资产数据可能存在null字段
-14. **统一防抖工具** — 各模块防抖必须用 `config.js` 的 `debounce(key, fn, delay)` 函数，禁止在各模块内独立实现 `setTimeout` 防抖，避免重复定时器
-15. **图表实例销毁检查** — `charts.js` 渲染图表前必须先检查并销毁旧的 Chart.js 实例（`instance.destroy()`），防止内存泄漏和画布重用错误
-16. **附件分离存储** — `_saveToLocalStorage()` 写入资产数据时必须剥离附件 `url`（大base64字段），仅保留 `thumbnail` 等元数据；完整数据保存在 IndexedDB，`openFileViewer()` 按需从 IndexedDB 加载 `url`
-
-## 三、文件结构说明
-
-### 3.1 核心文件
+## 2. 目录结构
 
 ```
-index.html              — 主页面（含SVG图标定义、内联恢复脚本、预创建加载指示器）
-styles.css              — 全局样式（响应式布局、自定义滚动条、附件横向排版、CustomSelect删除按钮）
-simple_server.js        — Node.js HTTP服务器（端口8000，API: /api/save, /api/load, /api/check）
-final_chart_fix.js      — 图表渲染修复（200ms防抖，最后加载）
+固定资产管理系统离线版/
+├── index.html              # 主页面（含 <head> 内联脚本 + SVG 图标定义）
+├── styles.css              # 全局样式
+├── main.js                 # Electron 主进程（窗口、HTTP 服务器、数据目录）
+├── final_chart_fix.js      # 图表渲染修复（监听 saveToLocalStorage/switchPage，200ms 防抖）
+├── asset_label_print.html  # 资产标签打印页面
+├── 安装.bat                # 创建桌面快捷方式（调用 install.ps1，纯 ASCII 无编码问题）
+├── install.ps1            # 桌面安装 PowerShell 脚本（原生支持 Unicode）
+├── package.json            # 项目配置 + electron-builder 构建配置
+├── 交付报告.md             # 上一轮交付报告
+├── HANDOFF.md              # 本文档
+├── 统计数据功能说明.md     # 统计功能业务说明
+│
+├── js/                     # 前端模块（按 defer 顺序加载，见第 5 节）
+│   ├── config.js           # Logger、STORAGE_KEYS、State、工具函数
+│   ├── storage.js          # FileStorageManager 类（核心，约 1400 行）
+│   ├── notifications.js    # showNotification / showLoadingIndicator
+│   ├── navigation.js       # 页面切换 switchPage
+│   ├── dashboard.js        # 控制面板（统计卡片、最近/损坏资产）
+│   ├── assets.js           # 资产列表、分页、详情、附件查看器
+│   ├── asset-add.js        # 添加资产表单、createPdfThumbnail
+│   ├── asset-edit.js       # 编辑资产表单
+│   ├── search-filter.js    # 搜索筛选、CustomSelect 组件
+│   ├── import-export.js    # Excel/JSON 导入导出、模板下载
+│   ├── print.js            # 打印、二维码生成
+│   ├── charts.js           # 统计报表 4 个图表
+│   ├── maintenance.js      # 维护记录管理
+│   └── init.js             # 系统初始化入口
+│
+├── libs/                   # 第三方库（全部本地化）
+│   ├── chart.min.js        # Chart.js
+│   ├── xlsx.full.min.js    # SheetJS
+│   ├── qrcode.min.js       # 二维码生成
+│   ├── pdf.min.js          # PDF.js 主库
+│   ├── pdf.worker.min.js   # PDF.js Worker
+│   ├── fa-solid-900.woff2  # Font Awesome 字体（仅 solid 实心体）
+│   └── font-awesome.min.css # Font Awesome 样式（仅含项目用到的图标）
+│
+├── data/                   # 数据目录（运行时读写）
+│   ├── *.js                # JSONP 风格数据文件，赋值到 window.__LOCAL_DATA__
+│   └── *.json              # 纯 JSON 备份
+│
+└── dist/                   # 构建产物（已在 .gitignore）
+    ├── 固定资产管理系统-便携版-2.4.0.exe
+    └── win-unpacked/       # 解包目录
 ```
 
-### 3.2 JS模块（js/目录，按index.html加载顺序）
+---
 
-| 文件 | 职责 | 关键函数 |
-|------|------|----------|
-| `config.js` | 全局变量、STORAGE_KEYS常量、Logger、getElement/getActivePage工具函数、统一防抖debounce、轻量状态管理State | `STORAGE_KEYS`, `currentView`, `assetsData`, `debounce()`, `State` |
-| `storage.js` | FileStorageManager类、数据加载/保存、文件监听轮询、跨浏览器同步 | `loadFromLocalStorage()`, `saveToLocalStorage()`, `_saveToLocalStorage()`, `_loadFromLocalStorage()` |
-| `notifications.js` | 通知消息、加载指示器（visible类控制） | `showLoadingIndicator()`, `hideLoadingIndicator()` |
-| `navigation.js` | 页面切换、currentView保存/恢复、图片缩放重置 | `switchPage()`, `resetImageZoom()` |
-| `dashboard.js` | 控制面板渲染（统计卡片、最近资产、损坏设备） | `renderRecentAssets()`, `renderDamagedAssets()`, `updateStatistics()` |
-| `assets.js` | 资产列表渲染、分页、详情页、附件查看器 | `renderAllAssets()`, `viewAssetDetails()` |
-| `asset-add.js` | 添加资产表单、文件上传预览、CustomSelect初始化 | `bindAddAssetEvents()` |
-| `search-filter.js` | CustomSelect自定义下拉组件（添加/删除选项）、多条件筛选 | `CustomSelect` class |
-| `import-export.js` | Excel/JSON导入导出、模板下载、备份恢复 | `importFromExcel()`, `exportToExcel()` |
-| `print.js` | 固定资产登记卡打印、标签打印、二维码生成 | `printAssetCard()`, `generateCardFromTemplate()` |
-| `asset-edit.js` | 资产编辑表单、附件保存、CustomSelect初始化 | `saveEditedAsset()`, `createEditForm()` |
-| `charts.js` | 统计报表Chart.js图表 | `renderAllReportsCharts()` |
-| `maintenance.js` | 维护记录CRUD | `addMaintenanceRecord()` |
-| `events.js` | 事件绑定（按钮点击、搜索、筛选、文件监听回调、刷新按钮） | `bindCoreEventListeners()`, `bindDataDependentEventListeners()`, `refreshActivePageContent()` |
-| `init.js` | DOMContentLoaded初始化、页面状态恢复、模板加载、扫码跳转 | `initTemplateLoading()`, `handleAssetUrlParam()` |
+## 3. 三种运行模式
 
-### 3.3 数据文件（data/目录）
+| 模式 | 启动方式 | 数据目录 | HTTP 服务器 |
+|------|----------|----------|-------------|
+| 便携 exe | 双击 `.exe` | `<exe所在目录>/data/` | 内嵌（127.0.0.1:动态端口） |
+| NSIS 安装版 | 安装后启动 | `app.getPath('userData')/data/` | 内嵌 |
+| 开发模式 | `npm start` | `<项目根>/data/` | 内嵌 |
+| 浏览器调试 | `python -m http.server 8000` | `<项目根>/data/`（只读） | 外部静态服务器 |
 
-每个数据键同时保存 `.js`（file://模式脚本注入）和 `.json`（服务器API读写）两份：
+**判断逻辑**（见 [main.js#L51](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/main.js#L51) `getPortableDataDir`）：
+1. `process.env.PORTABLE_EXECUTABLE_DIR` 存在 → 便携模式
+2. `app.isPackaged` 为 true → NSIS 安装模式
+3. 否则 → 开发模式
 
-| 文件 | STORAGE_KEY | 说明 |
-|------|-------------|------|
-| `assetManagementData.js/json` | `assetManagementData` | 资产数据数组 |
-| `userStateData.js/json` | `userStateData` | 用户状态（currentView, currentPage, 筛选条件, 系统设置） |
-| `custom_options_owner.js/json` | `custom_options_owner` | 主体自定义选项 |
-| `custom_options_type.js/json` | `custom_options_type` | 设备类型自定义选项 |
-| `custom_options_department.js/json` | `custom_options_department` | 部门自定义选项 |
-| `custom_options_*_deleted.js/json` | `custom_options_*_deleted` | 已删除的预设选项（防止重新出现） |
+> **关键**：NSIS 安装到 `Program Files` 时该目录不可写，必须用 `app.getPath('userData')`。这是 P0-1 修复的根因，勿回退。
 
-### 3.4 第三方库（libs/目录）
+---
 
-| 库 | 用途 |
-|----|------|
-| `chart.min.js` | Chart.js 统计图表 |
-| `xlsx.full.min.js` | SheetJS Excel导入导出 |
-| `pdf.min.js` + `pdf.worker.min.js` | PDF.js 附件PDF缩略图渲染 |
-| `qrcode.min.js` | 二维码生成（标签打印） |
-| `font-awesome.min.css` + `fa-solid-900.woff2` | Font Awesome图标字体 |
+## 4. 数据存储架构（核心，务必理解）
 
-### 3.5 脚本和工具
+### 4.1 三重冗余策略
 
-| 文件 | 说明 |
-|------|------|
-| `simple_server.js` | 主服务器（Node.js，端口8000） |
-| `start_server.bat` | 启动Node.js服务器 |
-| `start_simple_server.bat` | 启动Python服务器 |
-| `一键创建桌面快捷方式.bat` | 创建桌面快捷方式（命名"固定资产管理系统离线版"） |
-| `create_shortcut.ps1` | PowerShell快捷方式创建脚本 |
+`FileStorageManager`（[storage.js#L13](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/js/storage.js#L13)）支持两种模式：
 
-## 四、最近修改记录（本次会话）
+**服务器模式**（Electron 启动时，`fileApiReady=true`）：
 
-### 4.8 自动文件同步与手动连接体验优化（2026-08-14）
+```
+写入 setItem(key, data):
+  1. _saveToServer(key, data)        # POST /api/save 写 data/{key}.json + 同步写 .js
+  2. _saveToIndexedDB(key, data)    # 冗余备份（P0-2 新增）
+  3. _saveToIndexedDB('__ts_'+key, Date.now())  # 时间戳
+  4. _saveToLocalStorage(key, data)  # 同步兜底
 
-**问题**: 之前的自动连接方案（全局click监听器）导致：
-1. 打开页面时不弹出文件夹选择器，切换页面时才触发
-2. 每次点击"允许"后误报"检测到数据变化"（文件写入后被文件监听误判为外部修改）
-3. 需每次手动选择data文件夹，无法自动恢复
-4. 删除已保存附件后无法保存
+读取 getItem(key):
+  1. _loadFromServer(key)            # 优先服务器
+  2. window.__LOCAL_DATA__[key]      # .js 文件注入的数据
+  3. _loadFromLocalStorage(key)      # localStorage
+  4. _loadFromIndexedDB(key)         # 最后兜底（P0-2 新增）
+```
 
-**修复文件**: `js/storage.js`, `js/events.js`, `js/asset-edit.js`, `js/config.js`, `js/search-filter.js`
+**本地模式**（`file://` 协议或服务器不可用时，`isLocalMode=true`）：
 
-- **[storage.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/storage.js)**：
-  - 删除废弃的 `_registerEarlyAutoConnectListener()` 方法（~100行，全局click监听器方案）
-  - 删除废弃的 `_clearBrowserCache()` 方法（~45行，浏览器重启清理方案）
-  - 删除废弃变量：`_autoConnectPending`、`_autoConnectClickListenerBound`、`_debugTrace`
-  - `_saveToScriptFile()` 写入成功后立即更新 `_fileLastModified[key] = file.lastModified`，防止文件监听轮询误报
-  - `_restoreFileSystemAccess()` 只调用 `queryPermission`（无需用户手势），权限已授予时静默恢复连接
-  - 新增 `_suppressWatchNotification` 机制：内部写入文件期间阻止 `onFileChange` 触发通知回调
+```
+写入 setItem(key, data):
+  1. _saveToIndexedDB(key, data)
+  2. _saveToIndexedDB('__ts_'+key, Date.now())
+  3. _saveToLocalStorage(key, data)
+  4. 若已授权 File System Access API:
+       _saveToScriptFile(key, data)  # 写 data/{key}.js
+     否则:
+       _downloadScriptFile(key, data)  # 触发浏览器下载
 
-- **[events.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/events.js)**：
-  - `initFileSyncBanner()` 中修改 `checkBannerState()`：浏览器支持File System Access API且未连接时显示横幅（之前是隐藏）
-  - `updateFileSyncStatus()` 简化状态文本，移除对 `_autoConnectClickListenerBound` 的引用
-  - `onFileChange` 回调入口增加 `_suppressWatchNotification` 检查（双重防护）
+读取 getItem(key):
+  1. 若 isFileSyncEnabled: 取 window.__LOCAL_DATA__ 和 IndexedDB 中数据量更大的一方
+  2. 否则: IndexedDB → window.__LOCAL_DATA__ → localStorage
+```
 
-- **[asset-edit.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/asset-edit.js)**：
-  - `renderEditModeAttachments()` 删除循环末尾重复的click事件绑定（原L435-441），每个分支内已绑定 `openFileViewer`
-  - 删除死代码 `setupEditModeAttachmentViewer()`（从未被调用，功能已由events.js文档级事件委托覆盖）
-  - `saveEditedAsset()` 中查找新文件预览从 `activePage.querySelectorAll` 改为 `document.getElementById('edit-file-previews')`，避免编辑表单不在activePage内部时找不到元素
-  - `finalizeSave()` 从DOM读取剩余未删除的已有附件（通过 `dataset.index` 映射），确保用户删除的附件不会被加回
-  - 无新文件时补充 `finalizeSave([])` 调用，确保删除已有附件后保存能正常执行
-  - `renderEditModeAttachments()` 和 `handleEditFileUpload()` 增加容器空值检查
+### 4.2 `.js` 文件的作用
 
-- **[config.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/config.js)**：
-  - `getElement()` 增加 `isConnected` 检测：缓存的DOM元素若已从文档移除，自动重新查询，修复stale引用问题
+`data/*.js` 文件采用 JSONP 风格，内容形如：
 
-- **[search-filter.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/search-filter.js)**：
-  - `searchAssets()` 对所有字段（id/owner/brandModel/user/department/type/description/location）统一做空值保护 `(field || '').toLowerCase()`，修复null字段导致TypeError静默返回空结果
-  - 扩展搜索范围：新增type（设备类型）、description（配置信息）、location（位置）字段
-
-**现在的连接流程**:
-| 场景 | 行为 |
-|------|------|
-| 首次使用 | 顶部横幅提示 → 用户点击"连接数据文件夹" → showDirectoryPicker弹出 → 选择文件夹 → 句柄保存到IndexedDB → 状态变为"文件同步已启用" |
-| 再次打开 | 自动读取已保存句柄 → queryPermission检查权限 → 权限已授予则静默恢复 → 无需手动选择 |
-| 权限失效 | 显示横幅 → 用户点击"连接" → 重新授权 |
-| 手动断开后 | 显示横幅 → 用户点击"连接" → 重新选择文件夹 |
-
-### 4.10 资产表格不渲染Bug修复 + 空引用防护（2026-08-14）
-
-**问题**: 运行时测试发现资产表格显示"暂无资产记录"，但 `assetsData` 有1条记录且 `dashboard-total-assets` 显示1。`total-records` 也更新为"共1条记录"，但表格tbody行数为0。
-
-**根因**: `renderAllAssets()` 中数据行追加逻辑被包裹在 `requestAnimationFrame()` 回调中。当资产页面非active（如初始化时当前视图为dashboard，或搜索/筛选在dashboard页触发）时，浏览器可能延迟或节流RAF回调，导致 `tableBody.appendChild(fragment)` 未执行，行不渲染。而 `renderPagination()` 在RAF外同步执行，所以 `total-records` 正常更新。
-
-**修复**: [assets.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/assets.js) L28-39 — 移除 `requestAnimationFrame` 包装，改为在 setTimeout 回调内同步使用 `DocumentFragment` 追加行。每页最多20行，同步追加无性能问题。
-
-**同时修复的空引用Bug**（运行时代码审查发现）:
-| 文件 | 行号 | 问题 | 修复 |
-|------|------|------|------|
-| [init.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/init.js#L185) | L185 | `checkUsage()` 是async但未await，存储告警静默失效 | 添加 `await` + try-catch |
-| [init.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/init.js#L192) | L192 | `backup-data` 按钮未判空 | 添加 `if (backupBtn)` 检查 |
-| [print.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/print.js#L8) | L8, L15 | `getElement('asset-id').textContent` 未判空 | 提取变量 + 三元判空 |
-| [maintenance.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/maintenance.js#L7) | L7, L42 | 同上 | 同上 |
-| [asset-edit.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/asset-edit.js#L550) | L550, L728 | 同上 | 同上 |
-
-**验证**: 浏览器测试通过 — 强制刷新后表格正确渲染1条资产记录（ZC-2025-001），`total-records`="共1条记录"，`dashboard-total-assets`="1"，无控制台error。
-
-### 4.9 全项目性能优化（2026-08-14）
-
-**目标**: 系统化优化渲染性能、内存管理、存储效率和代码可维护性。
-
-**优化文件**: `js/config.js`, `js/storage.js`, `js/assets.js`, `js/events.js`, `js/search-filter.js`, `js/charts.js`
-
-- **[config.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/config.js)**：
-  - 新增统一防抖工具函数 `debounce(key, fn, delay)`（L114-129）：通过唯一key合并定时器，避免各模块重复实现 `setTimeout` 防抖
-  - 新增轻量状态管理 `State` 对象（L73-110）：提供 `on/setAssetsData/setView/setPage` 订阅-通知模式，支持 `assetsData/currentView/currentPage` 三个key的状态变更监听，避免各模块手动轮询
-
-- **[storage.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/storage.js)**：
-  - 文件监听轮询间隔从默认值优化为 5000ms（L29 `_fileWatchInterval = 5000`），降低CPU占用
-  - `_saveToLocalStorage()`（L932-948）对资产数据主动剥离附件 `url`（大base64字段），仅保留 `thumbnail` 等元数据写入 localStorage，解决 5MB 限额问题；完整数据仍保存在 IndexedDB
-  - `QuotaExceededError` 降级处理（L959-987）：空间不足时自动移除 `url/thumbnail/data` 后重试，确保保存不静默失败
-
-- **[assets.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/assets.js)**：
-  - `openFileViewer()`（L426-449）附件 `url` 不存在时（localStorage瘦身后），按需从 IndexedDB 加载完整数据获取 `url`，避免附件查看失败
-  - `renderAllAssets()` 使用 50ms 防抖 + `requestAnimationFrame` + `DocumentFragment` 减少DOM重绘
-
-- **[events.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/events.js)**：
-  - 搜索框统一使用 `debounce()` 函数：dashboard-search（L343, 200ms）、assets-search（L363, 200ms）
-  - 筛选器统一使用 `debounce()` 函数：filter（L371/L411, 100ms）
-  - 搜索框新增回车搜索（`keydown` Enter 触发），配合实时搜索提升交互体验
-  - 资产操作按钮、缩放控制、侧边栏菜单、面包屑导航统一使用 `document.addEventListener('click', ...)` 事件委托（L436/L512/L754/L789/L940），避免动态内容事件丢失
-
-- **[search-filter.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/search-filter.js)**：
-  - `applyFilters()` 增加 try-catch 错误边界（L38/L126-127），防止单个筛选条件异常导致整个筛选功能失效
-  - 筛选器元素不存在时提前返回并 `console.warn`（L41），避免后续 `null.value` 错误
-
-- **[charts.js](file:///d:/Users/Administrator/Desktop/电脑固定资产管理系统v2.4/js/charts.js)**：
-  - 4个图表渲染前均增加 `instance.destroy()` 检查（L97/L201/L304/L410），防止 Chart.js 实例重复创建导致内存泄漏和画布重用错误
-
-**优化效果**:
-| 优化项 | 改善点 |
-|--------|--------|
-| 统一防抖 | 消除各模块重复定时器，代码可维护性提升 |
-| 附件分离存储 | localStorage 空间占用大幅降低（移除base64 url），解决5MB限额 |
-| 图表销毁检查 | 防止内存泄漏，多次切换报表页面不再累积Chart实例 |
-| 事件委托统一 | 动态生成元素事件不再丢失，减少事件绑定数量 |
-| 文件监听间隔 | 5秒轮询降低CPU占用，平衡实时性与性能 |
-| 搜索/筛选防抖 | 200ms/100ms防抖减少不必要的渲染，输入更流畅 |
-| 错误边界 | 单点异常不再导致整个功能瘫痪 |
-
-### 4.5 导入/导出按钮迁移至系统设置页面
-
-**问题**: 数据管理按钮（导入Excel/JSON、导出Excel/JSON、下载模板）在所有页面顶部显示，杂乱且容易误触。
-
-**修复文件**: `index.html`, `styles.css`
-- 从页面顶部 `.content-header` 下的 `.data-management` 区域整体移除按钮组
-- 将 5 个按钮 + 2 个隐藏的 file input 插入到 `settings-page` 的"数据管理"卡片内（备份数据按钮上方）
-- 调整 [styles.css](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\styles.css) 中 `.data-management` 样式：
-  - `justify-content` 由 `flex-end`（右对齐）改为 `flex-start`（卡片内左对齐）
-  - `margin-bottom: var(--spacing-xl)` 改为 `margin: 15px 0`
-  - 新增 `flex-wrap: wrap` 支持窄屏自动换行
-- 按钮的 `id`（`import-excel`, `import-json`, `export-excel`, `export-json`, `download-template`, `file-import-excel`, `file-import-json`）保持不变，`events.js` 的事件绑定无需修改
-
-### 4.6 文件查看器模态框闪烁修复（未保存附件点击缩略图）
-
-**问题**: 编辑模式下上传但未保存的附件，点击缩略图打开查看器时会出现内容闪烁（modal显示后图片区域先空白再突然显示图片）。保存后点击已保存的附件则正常。
-
-**根因（时序问题）**: [openFileViewer](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\assets.js#L398) 原逻辑顺序：
 ```javascript
-imageElement.src = url;           // 1. 设置 src，开始异步加载图片
-modal.style.display = 'block';     // 2. 立即显示 modal → img 区域空白
-                                   // 3. onload 触发 → 图片突然显示 = 视觉跳动
+// assetManagementData 数据文件(本地模式)
+// 此文件由系统自动维护,请勿手动编辑
+// 最后更新: 2026-08-14T10:00:00.000Z
+window.__LOCAL_DATA__ = window.__LOCAL_DATA__ || {};
+window.__LOCAL_DATA__.assetManagementData = [ /* 资产数据 */ ];
 ```
-保存后正常的原因：首次点击时大图已被浏览器缓存，后续点击时 src 设置后立即命中缓存，空白时间极短。
 
-**修复文件**: `js/assets.js`, `js/events.js`
-- **[openFileViewer 重写](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\assets.js#L422-L458)**：
-  - 用临时 `new Image()` 对象预加载图片，加载完成后再给 `imageElement.src` 赋值
-  - 先绑定 `onload`/`onerror` 回调，再设置 `tempImg.src`（防止缓存命中时事件丢失）
-  - 对 DataURL 做 `tempImg.complete && naturalWidth` 快速通道（缓存命中时立即显示，不等事件）
-  - **图片就绪后才显示 modal**，消除"空白→图片"视觉跳跃
-- **统一 modal 显示控制方式**：
-  - 显示：`modal.classList.add('active')`（利用 CSS 中 `.modal { display:none }` + `.modal.active { display:flex }`）
-  - 隐藏：[closeFileViewer](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\events.js#L426-L440) 改为 `classList.remove('active')` + 清除 `style.display` 内联样式
-  - [ESC 关闭判断](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\events.js#L462-L465) 改为检查 `.classList.contains('active')`
-- 与 `styles.css` 保持一致：CSS 中 `.modal { display:none }` / `.modal.active { display:flex }`（L1020-L1030）
+**为什么用 `.js` 而不是 `.json`？**
+- `file://` 协议下 `fetch()` 无法读取本地文件
+- 但 `<script src="data/xxx.js">` 可以加载并执行
+- 所以用 `.js` 文件通过 `<script>` 标签注入到 `window.__LOCAL_DATA__`
 
-### 4.7 编辑模式"两个页面同时显示"视觉混乱修复
+**为什么还要保留 `.json`？**
+- HTTP 服务器模式下，前端通过 `/api/load` 读取 `.json`
+- `.js` 文件是同步写入的副本（P2-8 修复），保证两套数据版本一致
 
-**问题**: 进入资产编辑模式后，编辑表单上方可见但下方详情页的维护记录表头+表格依然可见，用户误以为是"两个页面来回闪烁"。
+### 4.3 附件分离存储
 
-**根因**: [toggleEditMode](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\asset-edit.js#L38-L92) 只隐藏了 `.asset-details`（设备信息三列）和 `#attachments-container`（附件卡片），没有隐藏 `#maintenance-records-table` 和它的 `.card-header`（维护记录区块在 card 内位于这两个元素之后）。
+- **localStorage**：仅存附件元数据（文件名、类型、缩略图），避免 5MB 限额
+- **IndexedDB**：存完整 base64 数据
+- 见 [storage.js#L932](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/js/storage.js#L932) `_saveToLocalStorage` 中的 `delete att.url` 逻辑
 
-**修复文件**: `js/asset-edit.js` — 在 3 处函数同步维护记录的显示/隐藏：
-- **[toggleEditMode (进入编辑)](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\asset-edit.js#L78-L83)**：隐藏 `maintenanceTable` + `maintenanceHeader`（通过 `previousElementSibling` 获取表头）
-- **[cancelEditMode (取消编辑)](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\asset-edit.js#L144-L149)**：恢复显示（`style.display = ''` 清空 inline 样式，继承 CSS 默认值）
-- **[cleanupEditUI (保存完成后)](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\asset-edit.js#L648-L653)**：恢复显示
-- 同时清理 [createEditForm](file:///d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4\js\asset-edit.js#L174-L181) 中调试遗留的红色边框（`3px solid #ff0000`）、硬编码 `backgroundColor`、`zIndex:9999` 等临时样式，保留必要的显示属性即可
+### 4.4 压缩导出
 
-### 4.4 页面刷新闪烁修复（2026-08-13）
+`compressData(data)` 会克隆数据并删除 `attachment.thumbnail` 和 `attachment.data`，用于导出/备份场景减小体积。注意：**保存到 localStorage 的资产数据会经过压缩**，但 IndexedDB 保留完整数据。
 
-**问题**: 浏览器刷新时页面先跳到首页再跳回当前页面，产生闪烁。
+---
 
-**根因**: 
-1. `init.js` 在 `DOMContentLoaded` 中过早移除了 `<head>` 内联恢复样式 `_restore_view_style`
-2. `loadFromLocalStorage` 异步回调中再次切换 active 类，导致二次渲染
+## 5. 前端模块加载顺序
 
-**修复文件**: `js/init.js`
-- 不再在 `DOMContentLoaded` 中移除临时样式，改为在 `loadFromLocalStorage` 回调完成后移除
-- 移除回调中的二次 active 类切换逻辑（前面同步代码已设置好）
+`index.html` 底部按以下顺序加载（全部 `defer`，按文档顺序执行）：
 
-### 4.2 加载指示器卡死修复
+```html
+<script src="libs/chart.min.js" defer></script>
+<script src="libs/xlsx.full.min.js" defer></script>
+<!-- 以下按依赖顺序 -->
+config.js → storage.js → notifications.js → navigation.js
+→ dashboard.js → assets.js → asset-add.js → search-filter.js
+→ import-export.js → print.js → asset-edit.js → charts.js
+→ maintenance.js → events.js → init.js → final_chart_fix.js
+```
 
-**问题**: 页面左上角一直显示"处理中，请稍候..."。
+> **P2-13 修复**：`final_chart_fix.js` 之前漏了 `defer`，导致它早于 `init.js` 执行，`saveToLocalStorage` 未定义。现已修复。
 
-**根因**: `initTemplateLoading()` 用 `loader.style.display = 'block'` 设置内联样式显示，但 `hideLoadingIndicator()` 只移除 `visible` CSS类，内联样式优先级更高导致无法隐藏。
+`init.js` 在 `DOMContentLoaded` 中调用 `loadFromLocalStorage()` 加载数据，完成后渲染 UI。
 
-**修复文件**: `js/init.js`, `js/notifications.js`
-- `initTemplateLoading()` 改用 `showLoadingIndicator()` 函数（统一通过 `visible` 类控制）
-- `hideLoadingIndicator()` 增加双保险：`loader.style.display = ''` 清除可能残留的内联样式
+---
 
-### 4.3 历史修复（本次会话之前）
+## 6. 硬约束（修改代码前必读）
 
-详见 `project_memory.md` 中的 Lessons Learned 和 Hard Constraints。主要包括：
-- 数据同步（file:// → 服务器模式跨浏览器共享）
-- 自定义下拉选项添加/删除/持久化/跨浏览器同步
-- 附件横向排版 + PDF缩略图生成
-- 附件保存数据丢失修复
-- 页面状态恢复（currentView保存到localStorage）
-- 二维码中文编码修复
-- 多页面DOM查询作用域问题
+以下约束来自历史踩坑，**违反会导致难以排查的 bug**：
 
-### 4.4 项目代码清理
+### 6.1 DOM 操作
 
-**清理范围**: 全项目遍历，删除调试代码、无用文件和死代码。
+- **DOM 查询必须用 `getActivePage()` 限定作用域**：多页面共存于 DOM，直接 `querySelector` 会命中非活动页的元素
+- **DOM 引用必须用 `getElement(id)` 缓存工具**：含 `isConnected` 检查，避免 stale 引用
+- **模态框用 `.active` CSS 类控制显示**，禁止 `style.display = 'block'`（会与 CSS 冲突导致闪烁）
 
-**已删除文件**:
-- `script.js` — 旧版单体脚本（已拆分到js/目录，index.html未加载）
-- `debug_form.html` — 调试表单页面（无引用）
-- `test_qr.html` — 二维码测试页面（无引用）
-- `simple_server.py` — Python服务器脚本（bat文件使用 `python -m http.server`，不依赖此文件）
+### 6.2 数据保存
 
-**已清理调试代码**:
-- `asset-edit.js`: 删除10处 `console.log`、调试用视觉指示器（绿色浮动div）、setTimeout检查块、重复的console.error
-- `events.js`: 删除文件监听console.log、废弃的 `bindEventListeners()` 兼容函数（从未被调用）
-- `import-export.js`: 删除4处 console.log（导入成功、XLSX加载、导出成功×2）
-- `index.html`: 删除 `onload="console.log('XLSX库加载成功')"` 内联调试日志、清理过期注释
-- `final_chart_fix.js`: 简化console.warn消息
+- **`saveToLocalStorage` 同步优先**：先写 localStorage（同步，保证刷新不丢），再写 IndexedDB（异步）
+- **服务器保存失败必须通知用户**（P1-7）：调用 `showNotification('⚠️ ...', 'warning', 6000)`
+- **写入 `.js` 文件失败不要阻塞主流程**：只记日志（见 [main.js#L266](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/main.js#L266)）
 
-**保留的日志**:
-- `console.error` — 所有错误日志保留
-- `console.warn` — 所有警告日志保留（localStorage空间不足、元素未找到等边界情况）
-- `Logger.info/warn` — 项目结构化日志系统保留
-- `simple_server.js` 中的 `console.log` — 服务器端日志保留
+### 6.3 异步与错误处理
 
-**验证结果**: 浏览器测试通过 — 页面加载正常、加载指示器隐藏、CustomSelect初始化（3个组件54个选项）、图表渲染（4个）、页面状态恢复、刷新后保持当前页面。
+- **所有异步操作包裹 try/catch**，失败时降级而非崩溃
+- **`chart.destroy()` 必须包裹 try/catch**（P2-9）：销毁异常会中断后续图表渲染
+- **`createPdfThumbnail` 失败必须通知用户**（P2-11）：区分加密/库加载失败/其他三类错误
+- **`alert()` 已全部替换为 `showNotification`**（P2-10）：禁止新增 `alert`
 
-## 五、已知问题和注意事项
+### 6.4 安全
 
-### 5.1 遗留问题
+- **`/api/save` 的 `key` 参数禁止包含 `../`、`/`、`\`、`:`**（路径遍历防护，见 [main.js#L150](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/main.js#L150)）
+- **`/api/save` 请求体上限 20 MB**（P1-4）：防止内存耗尽
+- **Electron `webPreferences`**：`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`（见 [main.js#L412](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/main.js#L412)）
+- **外部链接在系统浏览器打开**（见 [main.js#L432](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/main.js#L432) `setWindowOpenHandler`）
 
-| 问题 | 严重程度 | 说明 |
-|------|----------|------|
-| ~~`script.js`~~ | — | 已删除（旧版单体脚本，index.html未加载，js/目录已完全替代） |
-| ~~`debug_form.html` / `test_qr.html`~~ | — | 已删除（调试/测试页面，无引用） |
-| ~~`simple_server.py`~~ | — | 已删除（bat文件使用 `python -m http.server`，不依赖此文件） |
-| ~~`tests/` 目录~~ | — | 已删除（Playwright测试已过期，不兼容CustomSelect组件） |
-| localStorage 容量限制（~5MB） | 低 | 已通过附件分离存储缓解：`_saveToLocalStorage` 剥离附件 `url` 大字段，仅存元数据；`QuotaExceededError` 时自动降级移除 `thumbnail/data` 后重试 |
-| Font Awesome图标替换 | 低 | init.js中100ms后替换FA图标为SVG use元素，可能有短暂闪烁 |
+### 6.5 编码规范
 
-### 5.2 开发注意事项
+- **所有注释使用中文**
+- **日志使用 `Logger.info/warn/error(module, ...args)`**，不要直接 `console.log`
+- **防抖使用 `config.js` 的 `debounce(key, fn, delay)`**，不要自己写 `setTimeout`
+- **加载指示器统一用 `showLoadingIndicator()` / `hideLoadingIndicator()`**
 
-1. **修改JS文件后必须强制刷新** — 浏览器缓存较顽固，建议 `Ctrl+F5` 或添加 `?t=timestamp` 参数
-2. **测试数据同步** — 修改storage.js后，需在多个浏览器中测试数据同步
-3. **CustomSelect组件** — 异步加载选项，需用 `loadOptionsAsync()` / `loadOptionsSync()` 分别处理
-4. **图表防抖** — `final_chart_fix.js` 使用200ms防抖，修改图表渲染逻辑时注意不要绕过
-5. **附件base64** — 附件以base64编码存储，`url` 大字段在 localStorage 中被剥离（仅保留元数据），完整数据在 IndexedDB；`openFileViewer()` 按需从 IndexedDB 加载 `url`
-6. **Node.js依赖** — `package.json` 只有 `archiver`（用于打包），服务器本身是零依赖原生模块
-7. **服务器启动** — 端口8000，`node simple_server.js` 或 `python -m http.server 8000`
+---
 
-### 5.3 代码风格约定
+## 7. 构建与发布
 
-- 中文注释，中文变量名描述
-- 防御性编程：所有异步操作包裹 try-catch
-- 函数前加注释说明用途
-- DOM元素通过 `getElement(id)` 缓存（定义在 config.js）
-- 日志使用 `Logger.info/warn/error(module, ...args)`（定义在 config.js）
-
-## 六、快速启动指南
+### 7.1 构建命令
 
 ```bash
-# 方式1: Node.js服务器（推荐）
-cd d:\Users\Administrator\Desktop\电脑固定资产管理系统v2.4
-node simple_server.js
-# 访问 http://localhost:8000
-
-# 方式2: Python服务器
-python -m http.server 8000
-
-# 方式3: 双击index.html（file://模式，无跨浏览器共享）
+npm install              # 安装依赖
+npm start                # 开发模式启动
+npm run build            # 生成便携版 .exe
+npm run build:nsis       # 生成 NSIS 安装版
+npm run pack             # 仅打包不压缩（调试用）
 ```
 
-## 七、项目记忆文件位置
+### 7.2 构建配置要点
 
-接手Agent应首先阅读以下记忆文件获取完整上下文：
+`package.json` 的 `build` 字段（完整内容见 [package.json](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/package.json)）：
 
-| 文件 | 说明 |
-|------|------|
-| `c:\Users\Administrator\.trae-cn\memory\user_profile.md` | 用户偏好（中文沟通、系统化修复、详细文档） |
-| `c:\Users\Administrator\.trae-cn\memory\projects\...\project_memory.md` | 项目级约束、约定、经验教训 |
-| `c:\Users\Administrator\.trae-cn\memory\projects\...\20260813\topics.md` | 本次会话主题摘要 |
-| `c:\Users\Administrator\.trae-cn\memory\projects\...\20260813\session_memory_*.jsonl` | 本次会话详细记录 |
+| 参数 | 值 | 作用 |
+|------|------|------|
+| `target` | `portable` | 单文件免安装 exe |
+| `arch` | `["x64"]` | 64 位 |
+| `electronLanguages` | `["zh-CN", "en-US"]` | locale 从 30+ 精简到 2 个（P2-14） |
+| `compression` | `maximum` | 最大压缩比 |
+| `files` 排除规则 | `!data/*.json`、`!**/*.{md,d.ts,ts,map}`、`!**/.{git,idea,vscode}/**` | 排除备份/文档/源映射 |
+
+### 7.3 构建后验证
+
+构建完成后建议执行烟雾测试：
+
+1. 运行 `dist/win-unpacked/固定资产管理系统.exe`
+2. 观察启动日志：应看到 `[初始化] 创建数据目录` 和 `[服务器] HTTP 服务器运行在 http://127.0.0.1:<port>/`
+3. 等待 5~8 秒，确认窗口正常显示、无白屏
+4. 检查 `%AppData%/asset-management-system/data/`（NSIS 模式）或 exe 同级 `data/`（便携模式）是否有 8 个 `.js` 文件
+
+> **注意**：开发模式启动时数据目录是 `<项目根>/data/`，便携模式是 `<项目根>/dist/data/`（因为 exe 在 dist 下），两者不共享数据。
+
+### 7.4 桌面快捷方式
+
+双击项目根目录 `安装.bat`，会创建 `固定资产管理系统.lnk` 到桌面（指向 `dist/固定资产管理系统-便携版-{version}.exe`）。
 
 ---
 
-*本文档由Agent自动生成，用于项目交接。如有疑问请参阅项目记忆文件或源代码注释。*
+## 8. 已知问题与陷阱
+
+### 8.1 已修复但容易回退的坑
+
+| 问题 | 修复 | 容易回退的场景 |
+|------|------|----------------|
+| NSIS 数据目录不可写 | 用 `app.getPath('userData')` | 改 `getPortableDataDir` 时误删 `app.isPackaged` 分支 |
+| `chart.destroy()` 异常中断渲染 | try/catch + 置 null | 新增图表时忘记加 try/catch |
+| `final_chart_fix.js` 时序错误 | 加 `defer` | 调整 script 顺序时漏掉 |
+| `fa-regular-400.woff2` 404 | 删除该 `@font-face` | 误以为缺字体去补下载 |
+| `alert()` 阻塞 UI | 全部替换为 `showNotification` | 新增功能时习惯性写 `alert` |
+| `/api/save` chunk 编码错误 | 用 `Buffer.concat` | 改回字符串拼接 |
+| 便携初始化误判 | 只检查 `.js` 文件 | 改回检查所有文件 |
+
+### 8.2 未完成 / 待优化事项
+
+以下事项**尚未处理**，接手人可按需推进：
+
+1. **测试覆盖**：项目目前无自动化测试。建议补充 Playwright 端到端测试（用户技术栈包含 Playwright）：
+   - 启动 → 资产 CRUD → 导入导出 → 图表渲染
+   - 便携模式数据持久化（重启后数据仍在）
+
+2. **ICSP 签名**：exe 未做代码签名，Windows SmartScreen 会拦截首次运行。如需企业分发，需购买代码签名证书并配置 electron-builder 的 `win.certificateFile`。
+
+3. **应用图标**：当前使用 electron 默认图标（`default Electron icon is used`，见构建日志）。如需自定义图标，放置 `build/icon.ico`（256x256，多分辨率）。
+
+4. **`statistics.js` 说明文档**：项目根目录有 `统计数据功能说明.md`，内容是否与当前实现一致未校验。
+
+5. **PDF.js Worker 加载方式**：当前 `ensurePdfJs()` 动态加载 `libs/pdf.min.js`，未显式配置 `workerSrc`。若未来 PDF 渲染异常，检查 `pdfjsLib.GlobalWorkerOptions.workerSrc` 是否指向 `libs/pdf.worker.min.js`。
+
+6. **`asset_label_print.html`**：独立打印页面，与主应用的数据传递方式未在本轮交接中详查，修改前建议先读源码理解。
+
+### 8.3 调试技巧
+
+- **打开 DevTools**：`npm start -- --dev` 或设置 `NODE_ENV=development`
+- **查看存储数据**：DevTools → Application → IndexedDB / Local Storage
+- **查看 HTTP 服务器日志**：Electron 主进程的 `console.log` 输出在终端（开发模式）或 `dist/smoke_stdout.log`（烟雾测试时）
+- **强制刷新**：Electron `Ctrl+R`；浏览器 `Ctrl+F5` 或加 `?t=<时间戳>` URL 参数
+- **数据目录定位**：启动日志第一行 `[应用] 数据目录: <path>` 即为当前数据目录
+
+---
+
+## 9. 关键 API 速查
+
+### 9.1 主进程 API（main.js）
+
+| 端点 | 方法 | 作用 |
+|------|------|------|
+| `/api/load?key=<key>` | GET | 加载 `data/<key>.json` |
+| `/api/save?key=<key>` | POST | 保存到 `data/<key>.json` + 同步写 `.js`（请求体上限 20MB） |
+| `/api/delete?key=<key>` | DELETE | 删除 `data/<key>.json` |
+| `/api/list` | GET | 列出所有数据键 |
+| `/api/ping` | GET | 存活检测，返回 `window.__serverOnline=true` |
+| `/api/info` | GET | 服务器信息（端口、URL） |
+
+### 9.2 前端核心 API
+
+| API | 文件 | 作用 |
+|-----|------|------|
+| `storageManager.setItem(key, data)` | storage.js | 写入数据（三重冗余） |
+| `storageManager.getItem(key)` | storage.js | 读取数据（按优先级回退） |
+| `storageManager.compressData(data)` | storage.js | 压缩数据（移除附件 thumbnail/data） |
+| `storageManager.decompressData(data)` | storage.js | 解压数据 |
+| `storageManager.checkVersionCompatibility(version)` | storage.js | 版本兼容性检查 |
+| `saveToLocalStorage()` | storage.js | 保存所有数据（防抖，见下方说明） |
+| `loadFromLocalStorage(callback)` | storage.js | 加载所有数据 |
+| `showNotification(msg, type, duration)` | notifications.js | 显示 Toast（type: info/success/warning/error） |
+| `showLoadingIndicator()` / `hideLoadingIndicator()` | notifications.js | 加载指示器 |
+| `switchPage(pageName)` | navigation.js | 切换页面 |
+| `getActivePage()` | config.js | 获取当前活动页 DOM |
+| `getElement(id)` | config.js | 缓存式 DOM 查询（含 isConnected 检查） |
+| `debounce(key, fn, delay)` | config.js | 统一防抖 |
+| `Logger.info/warn/error(module, ...args)` | config.js | 统一日志 |
+| `renderAllReportsCharts()` | charts.js | 渲染 4 个统计图表 |
+| `createPdfThumbnail(dataUrl, w, h, callback, fileName)` | asset-add.js | 生成 PDF 缩略图 |
+| `exportToExcel(type)` / `exportToJson(type)` | import-export.js | 导出 |
+| `handleExcelImport(e)` / `handleJsonImport(e)` | import-export.js | 导入 |
+
+### 9.3 `saveToLocalStorage` 的特殊行为
+
+`final_chart_fix.js` 会**包装** `window.saveToLocalStorage` 和 `window.switchPage`：
+
+```javascript
+const originalSaveToLocalStorage = window.saveToLocalStorage;
+window.saveToLocalStorage = function() {
+    const result = originalSaveToLocalStorage.apply(this, arguments);
+    if (window.updateStatistics) window.updateStatistics();
+    // 若在报表页，200ms 防抖重渲染图表
+    if (在报表页 && window.renderAllReportsCharts) {
+        debounce 重渲染
+    }
+    return result;
+};
+```
+
+**含义**：不要直接修改 `saveToLocalStorage` 的实现来加图表刷新逻辑，而应修改 `final_chart_fix.js` 的包装层。
+
+### 9.4 STORAGE_KEYS 常量
+
+定义在 [config.js#L43](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/js/config.js#L43)，所有存储键名集中管理：
+
+```javascript
+const STORAGE_KEYS = {
+    ASSET_MANAGEMENT_DATA: 'assetManagementData',
+    USER_STATE_DATA: 'userStateData',
+    SYSTEM_SETTINGS: 'systemSettings',
+    BACKUP_HISTORY: 'backupHistory',
+    ASSET_CARD_TEMPLATE: 'assetCardTemplate',
+    ANALYZED_EXCEL_FORMATS: 'analyzedExcelFormats',
+    CUSTOM_OPTIONS_OWNER: 'custom_options_owner',
+    CUSTOM_OPTIONS_TYPE: 'custom_options_type',
+    CUSTOM_OPTIONS_DEPARTMENT: 'custom_options_department',
+    CUSTOM_OPTIONS_OWNER_DELETED: 'custom_options_owner_deleted',
+    CUSTOM_OPTIONS_TYPE_DELETED: 'custom_options_type_deleted',
+    CUSTOM_OPTIONS_DEPARTMENT_DELETED: 'custom_options_department_deleted'
+};
+```
+
+`data/` 目录下的文件名与这些键名一一对应（如 `assetManagementData.js` / `assetManagementData.json`）。
+
+---
+
+## 10. 已完成修复清单（v2.4.4）
+
+共 18 项，按优先级分组。详细信息见 [交付报告.md](file:///d:/Users/Administrator/Desktop/固定资产管理系统exe离线便携版/交付报告.md)。
+
+### P0 数据风险（3 项）
+- P0-1：NSIS 安装模式数据目录不可写 → `getPortableDataDir` 区分三种模式
+- P0-2：服务器模式缺 IndexedDB 冗余 → `setItem`/`getItem` 增加 IndexedDB 备份
+- P0-3：便携初始化判断过宽松 → 只检查 `.js` 文件
+
+### P1 稳定性（4 项）
+- P1-4：`/api/save` chunk 编码错误 → 改用 `Buffer.concat` + 20MB 上限
+- P1-5：HTTP 服务器未关闭 → `before-quit` 钩子优雅关闭 + 3 秒超时
+- P1-6：`value=undefined` 写入包装对象 → 显式校验
+- P1-7：保存失败静默 → `Logger.error` + `showNotification`
+
+### P2 优化（8 项）
+- P2-8：便携模式 `.js` 与 `.json` 版本不一致 → `/api/save` 同步写 `.js`
+- P2-9：`chart.destroy()` 异常中断渲染 → 4 个图表实例加 try/catch + 置 null
+- P2-10：`alert()` 阻塞 UI → 16 处替换为 `showNotification`，增强支持 `duration` 和多行
+- P2-11：PDF 缩略图失败无提示 → `createPdfThumbnail` 新增 `fileName` 参数，区分三类错误
+- P2-12：`fa-regular-400.woff2` 404 → 删除 `@font-face`，`.far` 回退到 solid
+- P2-13：`final_chart_fix.js` 时序错误 → 加 `defer`
+- P2-14：构建体积过大 → `electronLanguages` + `compression: maximum` + 排除规则
+- P2-15：README 死链 → 重写
+
+### P3 代码规范（2 项）
+- P3-16：`main.js` 未使用 `url` 模块 → 删除
+- P3-17：静态文件无缓存 → `libs/` 下不可变资源加 `Cache-Control: public, max-age=2592000, immutable`
+
+> **勘误**：上一份交付报告中 P3-17 描述为「Cache-Control: no-cache」有误，实际是给 `libs/` 下的库文件加长缓存（30 天 immutable），主应用文件不加缓存。详见 [main.js#L354](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/main.js#L354)。
+
+### 验证
+- 8 个修改文件全部通过 `node --check`
+- 构建成功产出 `固定资产管理系统-便携版-2.4.0.exe`（61.4 MB）
+- 烟雾测试：启动 8 秒未崩溃，数据目录创建成功，HTTP 服务器在 `127.0.0.1:8221` 运行，stderr 无错误
+
+---
+
+## 11. 技术栈与版本
+
+| 组件 | 版本 |
+|------|------|
+| Electron | 30.5.1（package.json 声明 `^30.0.0`） |
+| electron-builder | 24.13.3 |
+| Node.js（开发环境） | 任意现代版本（建议 18+） |
+| Chart.js | 见 `libs/chart.min.js` |
+| SheetJS (XLSX) | 0.18.5 |
+| PDF.js | 见 `libs/pdf.min.js` |
+| Font Awesome | 6.x（仅 solid 字体） |
+
+---
+
+## 12. 接手人建议工作流
+
+1. **第一周**：跑通项目，阅读 `storage.js` 全文（这是最复杂的模块），理解三重冗余
+2. **第二周**：补 Playwright 端到端测试基线（启动 + 资产 CRUD）
+3. **后续**：按业务需求迭代，每次修改后运行 `node --check` + 烟雾测试
+
+### 修改代码时的 PR 自检清单
+
+- [ ] `node --check` 语法通过
+- [ ] 没有新增 `alert()`
+- [ ] 异步操作有 try/catch
+- [ ] DOM 查询用了 `getActivePage()` 或 `getElement(id)`
+- [ ] 新增图表的 `destroy()` 包裹了 try/catch
+- [ ] 日志用 `Logger` 而非 `console.log`
+- [ ] 注释为中文
+- [ ] 若改了 `package.json` 的 `files`，确认构建产物包含必要文件
+- [ ] 构建后做烟雾测试
+
+---
+
+## 13. 联系上下文
+
+- **项目语言**：中文（代码注释、用户界面、文档均使用中文）
+- **用户偏好**：系统性修复而非打补丁；要求详细记录变更和测试结果
+- **历史对话**：用户曾要求「项目优化空间检查」→ 产出 20 项问题清单 → 按 P0~P3 优先级全部修复
+
+---
+
+**文档结束。如有疑问，优先阅读源码注释（中文），其次参考 [交付报告.md](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/交付报告.md) 和 [README.md](file:///d:/Users/Administrator/Desktop/固定资产管理系统离线版/README.md)。**

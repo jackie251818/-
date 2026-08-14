@@ -6,8 +6,8 @@ function handleExcelImport(e) {
     Logger.info('Import', 'Excel 导入触发');
     if (!checkXlsxLibrary()) {
         // 本地版本：直接提示用户需要手动下载库文件
-        alert('XLSX库未正确加载。请手动下载XLSX库文件并放置到libs目录。\n下载地址: https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js\n\n点击确定将切换到JSON导入方式。');
-        
+        showNotification('XLSX库未正确加载。请手动下载XLSX库文件并放置到libs目录。\n下载地址: https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js\n\n即将切换到JSON导入方式。', 'error', 8000);
+
         // 清空文件选择，允许重复选择同一文件
         e.target.value = '';
         hideLoadingIndicator();
@@ -20,7 +20,7 @@ function handleExcelImport(e) {
     
     // 只接受Excel文件
     if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-        alert('请导入Excel格式的文件');
+        showNotification('请导入Excel格式的文件', 'warning');
         hideLoadingIndicator();
         return;
     }
@@ -121,8 +121,8 @@ function handleExcelImport(e) {
                     
                     // 保存到本地存储
                     saveToLocalStorage();
-                    
-                    alert(`成功导入 ${addedCount} 条新资产，更新 ${updatedCount} 条现有资产`);
+
+                    showNotification(`成功导入 ${addedCount} 条新资产，更新 ${updatedCount} 条现有资产`, 'success', 4000);
                     hideLoadingIndicator();
                     return;
                 }
@@ -154,14 +154,14 @@ function handleExcelImport(e) {
             // 开始分批处理
             processBatch();
         } catch (error) {
-            alert(`导入失败: ${error.message}`);
+            showNotification(`导入失败: ${error.message}`, 'error', 4000);
             console.error('导入错误:', error);
             hideLoadingIndicator();
         }
     };
-    
+
     reader.readAsArrayBuffer(file);
-    
+
     // 清空文件选择，允许重复选择同一文件
     e.target.value = '';
 }
@@ -173,7 +173,7 @@ function handleJsonImport(e) {
     
     // 只接受JSON文件
     if (!file.name.endsWith('.json')) {
-        alert('请导入JSON格式的文件');
+        showNotification('请导入JSON格式的文件', 'warning');
         return;
     }
     
@@ -248,9 +248,9 @@ function handleJsonImport(e) {
             saveToLocalStorage();
             
             // 记录导入操作
-            alert(`成功导入 ${addedCount} 条新资产，更新 ${updatedCount} 条现有资产\n${importSourceInfo}`);
+            showNotification(`成功导入 ${addedCount} 条新资产，更新 ${updatedCount} 条现有资产\n${importSourceInfo}`, 'success', 5000);
         } catch (error) {
-            alert(`导入失败: ${error.message}`);
+            showNotification(`导入失败: ${error.message}`, 'error', 4000);
             console.error('导入错误:', error);
         } finally {
             // 隐藏加载指示器
@@ -268,21 +268,21 @@ function handleJsonImport(e) {
 function exportToExcel(exportType = 'assets') {
     Logger.info('Import', 'Excel 导出触发 | 类型:', exportType, '| 资产数:', assetsData.length);
     if (assetsData.length === 0) {
-        alert('没有可导出的资产数据');
+        showNotification('没有可导出的资产数据', 'warning');
         return;
     }
-    
+
     // 检查XLSX库是否加载成功
     if (!checkXlsxLibrary()) {
         // 显示加载XLSX库的提示
-        alert('正在加载Excel处理库，请稍候再试...');
-        
+        showNotification('正在加载Excel处理库，请稍候再试...', 'info');
+
         // 尝试延迟重试
         setTimeout(() => {
             if (checkXlsxLibrary()) {
                 exportToExcel(exportType);
             } else {
-                alert('XLSX库加载失败，您可以使用导出JSON的方式进行数据管理。\n点击确定将立即导出JSON格式数据。');
+                showNotification('XLSX库加载失败，您可以使用导出JSON的方式进行数据管理。\n即将导出JSON格式数据。', 'warning', 6000);
                 exportToJson(exportType);
             }
         }, 2000);
@@ -486,7 +486,7 @@ function exportToExcel(exportType = 'assets') {
                 XLSX.writeFile(workbook, fileName);
             }
         } catch (error) {
-            alert(`导出失败: ${error.message}`);
+            showNotification(`导出失败: ${error.message}`, 'error', 4000);
             console.error('导出错误:', error);
         } finally {
             // 隐藏加载指示器
@@ -594,7 +594,7 @@ function downloadExcelTemplate() {
         // 再次检查XLSX库是否加载成功
         if (!checkXlsxLibrary()) {
             // 本地版本：直接提示用户需要手动下载库文件
-            alert('XLSX库未正确加载。请手动下载XLSX库文件并放置到libs目录。\n下载地址: https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js\n\n您仍可以使用JSON导入/导出功能进行数据管理。');
+            showNotification('XLSX库未正确加载。请手动下载XLSX库文件并放置到libs目录。\n下载地址: https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js\n\n您仍可以使用JSON导入/导出功能进行数据管理。', 'error', 8000);
             return;
         }
         
@@ -696,11 +696,11 @@ function downloadExcelTemplate() {
         // 隐藏加载指示器并显示成功提示
         setTimeout(() => {
             hideLoadingIndicator();
-            alert('模板下载成功！请按照模板格式填写资产信息后导入。');
+            showNotification('模板下载成功！请按照模板格式填写资产信息后导入。', 'success', 4000);
         }, 500);
     } catch (error) {
         hideLoadingIndicator();
-        alert(`模板下载失败: ${error.message}`);
+        showNotification(`模板下载失败: ${error.message}`, 'error', 4000);
         console.error('模板生成错误:', error);
     }
 }
@@ -709,7 +709,7 @@ function downloadExcelTemplate() {
 function exportToJson(exportType = 'assets') {
     Logger.info('Import', 'JSON 导出触发 | 类型:', exportType, '| 资产数:', assetsData.length);
     if (assetsData.length === 0) {
-        alert('没有可导出的资产数据');
+        showNotification('没有可导出的资产数据', 'warning');
         return;
     }
     
@@ -826,7 +826,7 @@ function exportToJson(exportType = 'assets') {
                 
             }
         } catch (error) {
-            alert(`导出失败: ${error.message}`);
+            showNotification(`导出失败: ${error.message}`, 'error', 4000);
             console.error('导出错误:', error);
         } finally {
             // 隐藏加载指示器

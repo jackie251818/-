@@ -1007,8 +1007,19 @@ class FileStorageManager {
         Logger.debug('Storage', 'setItem:', key);
 
         if (this.fileApiReady) {
-            // 服务器模式
-            await this._saveToServer(key, data);
+            // 服务器模式:Server + IndexedDB + localStorage 三重冗余
+            // P0-2: 增加 IndexedDB 冗余备份,避免服务器写入失败时数据只停留在被剥离附件的 localStorage
+            const serverOk = await this._saveToServer(key, data);
+            if (!serverOk) {
+                // P1-7: 服务器保存失败时记录错误并通知用户(数据已写入 IndexedDB/localStorage,但文件可能未持久化)
+                Logger.error('Storage', `服务器保存失败: ${key},数据已缓存在内存/IndexedDB,但下次重启可能丢失最近更改`);
+                if (typeof showNotification === 'function') {
+                    showNotification('⚠️ 文件保存失败,数据已临时缓存在内存中。建议重新保存或导出备份。', 'warning', 6000);
+                }
+            }
+            // 无论服务器是否成功,都写入 IndexedDB + localStorage 作为冗余
+            await this._saveToIndexedDB(key, data);
+            await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
             this._saveToLocalStorage(key, data);
         } else {
             // 本地模式：IndexedDB + localStorage
@@ -1048,10 +1059,14 @@ class FileStorageManager {
         }
 
         if (this.fileApiReady) {
-            // 服务器模式：服务器 → window.__LOCAL_DATA__ → localStorage 回退
+            // 服务器模式:Server → window.__LOCAL_DATA__ → localStorage → IndexedDB(冗余备份)
+            // P0-2: IndexedDB 作为最后兜底,即使服务器文件损坏,内存中的 IndexedDB 仍能恢复
             const serverData = await this._loadFromServer(key);
             if (serverData !== null) {
                 this._saveToLocalStorage(key, serverData);
+                // 同步到 IndexedDB 保持冗余
+                await this._saveToIndexedDB(key, serverData);
+                await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
                 return serverData;
             }
             // 服务器没有数据，尝试从 window.__LOCAL_DATA__ 初始化（.js 文件数据）
@@ -1060,10 +1075,21 @@ class FileStorageManager {
                 // 保存到服务器，供其他浏览器使用
                 await this._saveToServer(key, scriptData);
                 this._saveToLocalStorage(key, scriptData);
+                await this._saveToIndexedDB(key, scriptData);
+                await this._saveToIndexedDB(`__ts_${key}__`, Date.now());
                 Logger.info('Storage', `从 .js 文件初始化服务器数据: ${key}`);
                 return scriptData;
             }
-            return this._loadFromLocalStorage(key);
+            // localStorage 回退
+            const lsData = this._loadFromLocalStorage(key);
+            if (lsData !== null) return lsData;
+            // P0-2: 最后兜底 - IndexedDB 冗余备份(服务器文件损坏时仍可恢复)
+            const idbData = await this._loadFromIndexedDB(key);
+            if (idbData !== null) {
+                Logger.warn('Storage', `服务器/localStorage 均无数据 ${key},从 IndexedDB 冗余备份恢复`);
+                return idbData;
+            }
+            return null;
         } else {
             // 本地模式数据优先级：
             // 1. 如果文件同步已启用：优先用 window.__LOCAL_DATA__（data/*.js 文件数据，跨浏览器共享）

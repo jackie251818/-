@@ -1,30 +1,21 @@
 /* 简化版Font Awesome图标 - 仅包含项目中使用的图标 */
 :root {
-    --fa-font-regular: normal 400 14px/1 "Font Awesome 6 Free";
     --fa-font-solid: normal 900 14px/1 "Font Awesome 6 Free";
 }
 
 /* Font Awesome 字体定义 */
-/* 常规字体 - 如果需要使用常规图标，请下载并放置此文件 */
-@font-face {
-    font-family: 'Font Awesome 6 Free';
-    font-style: normal;
-    font-weight: 400;
-    src: url('fa-regular-400.woff2') format('woff2');
-}
-
 /* 实心字体 - 已包含在libs目录中 */
 @font-face {
     font-family: 'Font Awesome 6 Free';
     font-style: normal;
     font-weight: 900;
     src: url('fa-solid-900.woff2') format('woff2');
+    font-display: block;
 }
 
-/* 下载地址（如果需要）：
-- https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-regular-400.woff2
-- https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-solid-900.woff2
-*/
+/* 注：常规字体(fa-regular-400.woff2)未随项目分发，
+   项目中所有图标均使用实心(fas)样式，所以 .far/.fa-regular
+   也回退到实心字体，避免 404 字体请求。 */
 
 /* 使用系统字体作为回退 */
 .fas, .fa-solid, .far, .fa-regular {
@@ -37,8 +28,9 @@
 }
 
 .far, .fa-regular {
+    /* 项目未分发 regular 字体，回退到 solid 以避免 404 */
     font-family: 'Font Awesome 6 Free';
-    font-weight: 400;
+    font-weight: 900;
 }
 
 .fa, .fas, .far, .fal, .fad, .fab {

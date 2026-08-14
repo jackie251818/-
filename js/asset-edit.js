@@ -419,7 +419,7 @@ function renderEditModeAttachments(asset) {
                                 });
                             }
                         }
-                    });
+                    }, attachment.name);
                 }
             }
         } else {
@@ -510,7 +510,7 @@ function handleEditFileUpload(e) {
                             <div class="remove-file">&times;</div>
                         `;
                     }
-                });
+                }, file.name);
             };
             pdfReader.readAsDataURL(file);
         } else if (file.type.startsWith('image/')) {
@@ -698,7 +698,7 @@ function saveEditedAsset() {
                                 fileData.thumbnail = thumbnailUrl;
                             }
                             resolve(fileData);
-                        });
+                        }, file.name);
                         return;
                     }
                     resolve(fileData);

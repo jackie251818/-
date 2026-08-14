@@ -94,7 +94,13 @@ function renderAssetStatusChart() {
     
     // 销毁已存在的图表实例（如果有）
     if (window.assetStatusChartInstance) {
-        window.assetStatusChartInstance.destroy();
+        try {
+            window.assetStatusChartInstance.destroy();
+        } catch (e) {
+            console.error('销毁 assetStatusChartInstance 失败:', e);
+            Logger?.error?.('Charts', '销毁 assetStatusChartInstance 失败:', e);
+        }
+        window.assetStatusChartInstance = null;
     }
     
     // 统计状态数据
@@ -198,7 +204,13 @@ function renderOwnerAssetsChart() {
     
     // 销毁已存在的图表实例（如果有）
     if (window.ownerAssetsChartInstance) {
-        window.ownerAssetsChartInstance.destroy();
+        try {
+            window.ownerAssetsChartInstance.destroy();
+        } catch (e) {
+            console.error('销毁 ownerAssetsChartInstance 失败:', e);
+            Logger?.error?.('Charts', '销毁 ownerAssetsChartInstance 失败:', e);
+        }
+        window.ownerAssetsChartInstance = null;
     }
     
     // 统计主体数据
@@ -301,7 +313,13 @@ function renderDepartmentAssetsChart() {
     
     // 销毁已存在的图表实例（如果有）
     if (window.departmentAssetsChartInstance) {
-        window.departmentAssetsChartInstance.destroy();
+        try {
+            window.departmentAssetsChartInstance.destroy();
+        } catch (e) {
+            console.error('销毁 departmentAssetsChartInstance 失败:', e);
+            Logger?.error?.('Charts', '销毁 departmentAssetsChartInstance 失败:', e);
+        }
+        window.departmentAssetsChartInstance = null;
     }
     
     // 统计部门数据
@@ -407,7 +425,13 @@ function renderAssetTypeChart() {
     
     // 销毁已存在的图表实例（如果有）
     if (window.assetTypeChartInstance) {
-        window.assetTypeChartInstance.destroy();
+        try {
+            window.assetTypeChartInstance.destroy();
+        } catch (e) {
+            console.error('销毁 assetTypeChartInstance 失败:', e);
+            Logger?.error?.('Charts', '销毁 assetTypeChartInstance 失败:', e);
+        }
+        window.assetTypeChartInstance = null;
     }
     
     // 统计设备类型数据

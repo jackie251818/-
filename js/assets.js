@@ -377,7 +377,7 @@ function renderAttachments(attachments) {
                                 }));
                             }
                         }
-                    });
+                    }, attachment.name);
                 }
             }
         } else {
