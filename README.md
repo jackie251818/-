@@ -68,6 +68,23 @@ python -m http.server 8000
 
 双击 `启动服务器.bat` 或 `start_server.bat`。
 
+### 方式五：便携版 EXE（免安装，开箱即用）
+
+通过 [GitHub Releases](https://github.com/jackie251818/asset-management-system/releases/latest) 下载基于 Electron 打包的 Windows 便携版，无需安装 Node.js 或任何依赖，双击即可运行：
+
+- **下载地址**：[Releases · asset-management-system](https://github.com/jackie251818/asset-management-system/releases/latest)
+- **文件名**：`固定资产管理系统-便携版-2.4.0.exe`
+- **文件大小**：约 61 MB（自包含，运行时自动解压到临时目录）
+- **适用系统**：Windows x64
+- **数据存储**：便携版运行时数据保存在临时解压目录的 `data/` 下，关闭后保留；如需迁移数据，可从系统设置导出备份
+
+```bash
+# 下载后双击 exe 即可运行，或通过命令行启动
+.\固定资产管理系统-便携版-2.4.0.exe
+```
+
+> 便携版基于 `electron/main.js` 打包，与网页版共享相同的 `js/`、`libs/`、`index.html`、`styles.css` 源码，功能一致。如需自行打包，参考 `package.json` 的 `build` 配置运行 `npm run build`，产物输出到 `release/` 目录（已加入 `.gitignore`，请通过 Releases 分发）。
+
 ## 项目结构
 
 ```
@@ -108,6 +125,12 @@ python -m http.server 8000
 │
 ├── data/                   # 数据目录（运行时自动生成）
 │   └── .gitkeep
+│
+├── electron/               # Electron 桌面应用
+│   ├── main.js             # 主进程
+│   └── server-launcher.js  # 服务器启动器
+│
+├── release/                # 打包产物目录（.gitignore 忽略，通过 GitHub Releases 分发）
 │
 ├── .gitignore
 ├── HANDOFF.md              # 开发交接文档

@@ -31,3 +31,8 @@ Desktop.ini
 *.tmp
 *.bak
 *.zip
+
+# 打包产物（便携版 EXE 通过 GitHub Releases 分发，不提交到仓库）
+release/*.exe
+release/*.zip
+release/*.7z
